@@ -33,6 +33,8 @@ import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
 
 // Tracks failed class names across runs for the "Re-run Failed" command
 let lastFailedClassNames: string[] = [];
+// Current set of Maven modules — updated on every refresh
+let currentModules: MavenModule[] = [];
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
@@ -46,19 +48,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const treeBuilder = new TestTreeBuilder(controller);
 
     // Initial discovery
-    const modules = await discoverModules(outputChannel);
-    if (modules.length === 0) {
+    currentModules = await discoverModules(outputChannel);
+    if (currentModules.length === 0) {
         outputChannel.appendLine('[Extension] No Maven modules found. Extension idle.');
         vscode.window.showInformationMessage('Maven Test Explorer: No pom.xml detected in workspace.');
         return;
     }
 
-    await buildTree(controller, treeBuilder, modules, outputChannel);
+    await buildTree(controller, treeBuilder, currentModules, outputChannel);
 
     // Auto-refresh when Java test files are added, removed, or renamed
     let refreshDebounce: NodeJS.Timeout | undefined;
     const scheduleAutoRefresh = () => {
-        if (!readSettings().autoRefreshOnSave) {
+        const currentSettings = readSettings();
+        if (!currentSettings.autoRefreshOnSave) {
             return;
         }
         if (refreshDebounce) {
@@ -66,9 +69,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         refreshDebounce = setTimeout(async () => {
             outputChannel.appendLine('[Extension] Test file change detected — refreshing tree...');
-            const freshModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, freshModules, outputChannel);
-        }, 500);
+            currentModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel);
+        }, currentSettings.autoRefreshDebounceMs);
     };
     const javaTestWatcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
     javaTestWatcher.onDidCreate(scheduleAutoRefresh);
@@ -80,16 +83,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     controller.resolveHandler = async (item) => {
         if (item === undefined) {
             // Full refresh requested
-            const freshModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, freshModules, outputChannel);
+            currentModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel);
         }
     };
 
     // refreshHandler: triggers the reload button that VS Code shows in the Testing sidebar
     controller.refreshHandler = async (_token) => {
         outputChannel.appendLine('[Extension] Reloading test tree...');
-        const freshModules = await discoverModules(outputChannel);
-        await buildTree(controller, treeBuilder, freshModules, outputChannel);
+        currentModules = await discoverModules(outputChannel);
+        await buildTree(controller, treeBuilder, currentModules, outputChannel);
     };
 
     // Run profile — the only active profile for MVP
@@ -97,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         RUN_PROFILE_LABEL,
         vscode.TestRunProfileKind.Run,
         async (request, token) => {
-            await runHandler(request, token, controller, treeBuilder, modules, outputChannel, context);
+            await runHandler(request, token, controller, treeBuilder, currentModules, outputChannel, context);
         },
         true,
     );
@@ -106,7 +109,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     startReportWatcher(controller, treeBuilder, outputChannel, context);
 
     // Register commands
-    registerCommands(context, controller, treeBuilder, modules, outputChannel);
+    registerCommands(context, controller, treeBuilder, outputChannel);
 
     outputChannel.appendLine('[Extension] Maven Test Explorer Bridge activated.');
 }
@@ -181,14 +184,13 @@ function registerCommands(
     context: vscode.ExtensionContext,
     controller: vscode.TestController,
     treeBuilder: TestTreeBuilder,
-    modules: MavenModule[],
     outputChannel: vscode.OutputChannel,
 ): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(CMD_REFRESH_TESTS, async () => {
             outputChannel.appendLine('[Command] Refreshing test tree...');
-            const freshModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, freshModules, outputChannel);
+            currentModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel);
             vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
         }),
 
@@ -199,7 +201,7 @@ function registerCommands(
             }
             const token = new vscode.CancellationTokenSource().token;
             const allRunAllResults: SuiteResult[] = [];
-            for (const module of modules) {
+            for (const module of currentModules) {
                 if (settings.clearReportsBeforeRun) {
                     clearReportDirectories(module.moduleDir);
                 }
@@ -228,7 +230,7 @@ function registerCommands(
             }
             const token = new vscode.CancellationTokenSource().token;
             const allRerunResults: SuiteResult[] = [];
-            for (const module of modules) {
+            for (const module of currentModules) {
                 const args = buildRerunFailedArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, lastFailedClassNames);
                 const result = await runMaven(module.moduleDir, args, outputChannel, token);
                 if (!result.cancelled) {
@@ -244,7 +246,7 @@ function registerCommands(
         }),
 
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, () => {
-            for (const module of modules) {
+            for (const module of currentModules) {
                 clearReportDirectories(module.moduleDir);
                 outputChannel.appendLine(`[Command] Cleaned reports: ${module.moduleDir}`);
             }
@@ -263,8 +265,8 @@ function registerCommands(
 
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, async () => {
             outputChannel.appendLine('[Command] Clearing test results...');
-            const freshModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, freshModules, outputChannel);
+            currentModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel);
             treeBuilder.resetAllResults();
             await vscode.commands.executeCommand('testing.clearTestResults');
             vscode.window.showInformationMessage('Maven Test Explorer: Results cleared.');
@@ -347,21 +349,28 @@ async function buildTree(
 
 function readAllReports(
     moduleDir: string,
-    _reportGlobs: readonly string[],
+    reportGlobs: readonly string[],
     outputChannel: vscode.OutputChannel,
 ): SuiteResult[] {
     const results: SuiteResult[] = [];
-    const fs = require('fs') as typeof import('fs');
+    const nodefs = require('fs') as typeof import('fs');
 
-    const reportDirs = [
-        path.join(moduleDir, 'target', 'surefire-reports'),
-        path.join(moduleDir, 'target', 'failsafe-reports'),
-    ];
+    // Convert globs to concrete paths by extracting the directory portion up to the first wildcard
+    // For standard patterns like '**/target/surefire-reports/TEST-*.xml' we resolve the report dir
+    // relative to moduleDir by stripping the leading '**/' and taking the parent of the file pattern.
+    const resolvedDirs = new Set<string>();
+    for (const glob of reportGlobs) {
+        // Strip leading '**/' or '*/' prefix
+        const stripped = glob.replace(/^\*+\//, '');
+        // Take the directory portion (everything before the last '/')
+        const dir = stripped.includes('/') ? stripped.substring(0, stripped.lastIndexOf('/')) : stripped;
+        resolvedDirs.add(path.join(moduleDir, dir));
+    }
 
-    for (const dir of reportDirs) {
+    for (const dir of resolvedDirs) {
         let files: string[];
         try {
-            files = fs.readdirSync(dir);
+            files = nodefs.readdirSync(dir);
         } catch {
             // Directory does not exist — skip silently
             continue;
