@@ -13,6 +13,9 @@ import {
     CONFIG_MULTI_MODULE_MODE,
     CONFIG_SHOW_OUTPUT_CHANNEL,
     CONFIG_AUTO_REFRESH_ON_SAVE,
+    CONFIG_SHOW_STATS,
+    CONFIG_STATS_FORMAT,
+    DEFAULT_STATS_FORMAT,
     SUREFIRE_GLOB,
     FAILSAFE_GLOB,
     DEFAULT_CLASS_TEMPLATE,
@@ -34,6 +37,8 @@ export interface ExtensionSettings {
     readonly multiModuleMode: MultiModuleMode;
     readonly showOutputChannel: boolean;
     readonly autoRefreshOnSave: boolean;
+    readonly showStats: boolean;
+    readonly statsFormat: string;
 }
 
 export function readSettings(): ExtensionSettings {
@@ -51,5 +56,7 @@ export function readSettings(): ExtensionSettings {
         multiModuleMode: cfg.get<MultiModuleMode>(CONFIG_MULTI_MODULE_MODE, 'auto'),
         showOutputChannel: cfg.get<boolean>(CONFIG_SHOW_OUTPUT_CHANNEL, true),
         autoRefreshOnSave: cfg.get<boolean>(CONFIG_AUTO_REFRESH_ON_SAVE, true),
+        showStats: cfg.get<boolean>(CONFIG_SHOW_STATS, true),
+        statsFormat: cfg.get<string>(CONFIG_STATS_FORMAT, DEFAULT_STATS_FORMAT),
     };
 }

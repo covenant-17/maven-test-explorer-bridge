@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { MavenModule } from './mavenProjectDetector';
 import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
 import { SuiteResult } from './surefireParser';
+import { readSettings } from './settings';
 
 /**
  * Builds and maintains the VS Code TestItem hierarchy.
@@ -88,6 +89,12 @@ export class TestTreeBuilder {
      * double-counting.
      */
     updateAggregates(suiteResults: readonly SuiteResult[]): void {
+        const settings = readSettings();
+        if (!settings.showStats) {
+            return;
+        }
+        const statsFormat = settings.statsFormat;
+
         // --- Step 1: direct stats per FQCN from suite results ---
         const directStats = new Map<string, AggStats>();
         for (const suite of suiteResults) {
@@ -124,7 +131,7 @@ export class TestTreeBuilder {
 
         // --- Step 3: apply description to class items ---
         for (const [fqcn, classItem] of this.classItems) {
-            classItem.description = formatStats(classAgg.get(fqcn)!);
+            classItem.description = formatStats(classAgg.get(fqcn)!, statsFormat);
         }
 
         // --- Step 4: aggregate package / module (root classes only — no double-counting) ---
@@ -142,11 +149,11 @@ export class TestTreeBuilder {
 
         for (const [pkgKey, stats] of pkgAccum) {
             const item = this.packageItems.get(pkgKey);
-            if (item) { item.description = formatStats(stats); }
+            if (item) { item.description = formatStats(stats, statsFormat); }
         }
         for (const [modKey, stats] of modAccum) {
             const item = this.moduleItems.get(modKey);
-            if (item) { item.description = formatStats(stats); }
+            if (item) { item.description = formatStats(stats, statsFormat); }
         }
     }
 
@@ -306,14 +313,15 @@ function accumulate(map: Map<string, AggStats>, key: string, stats: AggStats): v
     addInto(existing, stats);
 }
 
-function formatStats(stats: AggStats): string {
+function formatStats(stats: AggStats, format: string): string {
     const failCount = stats.failed + stats.error;
     const total = stats.passed + failCount + stats.skipped;
     if (total === 0) { return ''; }
 
-    const parts: string[] = [];
-    if (stats.passed > 0)  { parts.push(`✓${stats.passed}`);  }
-    if (failCount    > 0)  { parts.push(`✗${failCount}`);     }
-    if (stats.skipped > 0) { parts.push(`↷${stats.skipped}`); }
-    return '| ' + parts.join(' | ') + ` | ● ${total} | T `;
+    return format
+        .replace('{passed}',  String(stats.passed))
+        .replace('{failed}',  String(failCount))
+        .replace('{error}',   String(stats.error))
+        .replace('{skipped}', String(stats.skipped))
+        .replace('{total}',   String(total));
 }

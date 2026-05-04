@@ -145,6 +145,16 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically refresh the test tree when Java test files are created, deleted, or saved."
+        },
+        "mavenTestExplorer.showStats": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show pass/fail aggregate counts next to each node in the test tree."
+        },
+        "mavenTestExplorer.statsFormat": {
+          "type": "string",
+          "default": "| ✓{passed} | ✗{failed} | ● {total} | T ",
+          "description": "Format string for aggregate stats shown on test tree nodes. Available placeholders: {passed} — passed count, {failed} — failed + error count, {error} — error count (raw), {skipped} — skipped count, {total} — total count."
         }
       }
     }
