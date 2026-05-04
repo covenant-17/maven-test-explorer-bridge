@@ -54,6 +54,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     await buildTree(controller, treeBuilder, modules, outputChannel);
 
+    // Auto-refresh when Java test files are added, removed, or renamed
+    let refreshDebounce: NodeJS.Timeout | undefined;
+    const scheduleAutoRefresh = () => {
+        if (refreshDebounce) {
+            clearTimeout(refreshDebounce);
+        }
+        refreshDebounce = setTimeout(async () => {
+            outputChannel.appendLine('[Extension] Test file change detected — refreshing tree...');
+            const freshModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, freshModules, outputChannel);
+        }, 500);
+    };
+    const javaTestWatcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
+    javaTestWatcher.onDidCreate(scheduleAutoRefresh);
+    javaTestWatcher.onDidChange(scheduleAutoRefresh);
+    javaTestWatcher.onDidDelete(scheduleAutoRefresh);
+    context.subscriptions.push(javaTestWatcher);
+
     // resolveHandler: called lazily when VS Code expands a subtree
     controller.resolveHandler = async (item) => {
         if (item === undefined) {
