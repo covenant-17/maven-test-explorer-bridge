@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+
+# TypeScript incremental compilation cache
+*.tsbuildinfo
+
+# VS Code extension package
+*.vsix
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# VS Code extension packaging config
+.vscodeignore
+
+# Project planning docs
+plan/
+
+# OS
+.DS_Store
+Thumbs.db

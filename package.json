@@ -1,0 +1,166 @@
+{
+  "name": "maven-test-explorer-bridge",
+  "displayName": "Maven Test Explorer Bridge",
+  "description": "Bridges Maven/Surefire test results into the VS Code Testing sidebar.",
+  "version": "0.1.0",
+  "publisher": "maven-test-explorer",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "keywords": [
+    "java",
+    "maven",
+    "junit",
+    "surefire",
+    "test explorer"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/pom.xml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "mavenTestExplorer.refreshTests",
+        "title": "Maven: Refresh Tests",
+        "category": "Maven Test Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mavenTestExplorer.runAllTests",
+        "title": "Maven: Run All Tests",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.rerunFailed",
+        "title": "Maven: Re-run Failed Tests",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.cleanReports",
+        "title": "Maven: Clean Test Reports",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.copyMavenCommand",
+        "title": "Maven: Copy Maven Command for Test",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.clearResults",
+        "title": "Maven: Clear Test Results",
+        "category": "Maven Test Explorer",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "mavenTestExplorer.showHistory",
+        "title": "Maven: Show Run History",
+        "category": "Maven Test Explorer",
+        "icon": "$(history)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mavenTestExplorer.clearResults",
+          "group": "navigation",
+          "when": "view == workbench.view.testing"
+        },
+        {
+          "command": "mavenTestExplorer.showHistory",
+          "group": "navigation",
+          "when": "view == workbench.view.testing"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Maven Test Explorer Bridge",
+      "properties": {
+        "mavenTestExplorer.mavenExecutable": {
+          "type": "string",
+          "default": "mvn",
+          "description": "Path to the Maven executable (e.g. 'mvn' or '/usr/local/bin/mvn')."
+        },
+        "mavenTestExplorer.defaultCommand": {
+          "type": "string",
+          "default": "clean test",
+          "description": "Maven goals to run when executing tests (e.g. 'clean test')."
+        },
+        "mavenTestExplorer.defaultProfiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Maven profiles to activate by default (e.g. [\"dev\", \"ci\"])."
+        },
+        "mavenTestExplorer.additionalArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Additional arguments appended to every Maven command (e.g. '-Denv=dev01 -Dheadless=false')."
+        },
+        "mavenTestExplorer.reportGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "**/target/surefire-reports/TEST-*.xml",
+            "**/target/failsafe-reports/TEST-*.xml"
+          ],
+          "description": "Glob patterns for Surefire/Failsafe XML report files."
+        },
+        "mavenTestExplorer.watchReports": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically update Test Explorer when report XML files change."
+        },
+        "mavenTestExplorer.clearReportsBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Delete existing surefire-reports before running tests to prevent stale results."
+        },
+        "mavenTestExplorer.testClassCommandTemplate": {
+          "type": "string",
+          "default": "{maven} {profiles} {args} -Dtest={className} test",
+          "description": "Template for running a single test class. Placeholders: {maven}, {profiles}, {args}, {className}."
+        },
+        "mavenTestExplorer.testMethodCommandTemplate": {
+          "type": "string",
+          "default": "{maven} {profiles} {args} -Dtest={className}#{methodName} test",
+          "description": "Template for running a single test method. Placeholders: {maven}, {profiles}, {args}, {className}, {methodName}."
+        },
+        "mavenTestExplorer.multiModuleMode": {
+          "type": "string",
+          "enum": ["auto", "root", "perModule"],
+          "default": "auto",
+          "description": "How to handle multi-module Maven projects. 'auto' detects automatically."
+        },
+        "mavenTestExplorer.showOutputChannel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reveal the Maven Test Explorer output channel when a test run starts."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "npm run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
+    "watch": "npm-run-all -p watch:esbuild watch:tsc",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && node esbuild.js --production",
+    "vscode:prepublish": "npm run package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.84.0",
+    "esbuild": "^0.20.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.0"
+  }
+}
