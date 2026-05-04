@@ -178,7 +178,7 @@ export class TestTreeBuilder {
         classes: readonly TestClassInfo[],
     ): vscode.TestItem {
         const pkgId = `${moduleId}/${packageName}`;
-        const pkgItem = this.controller.createTestItem(pkgId, packageName || '(default package)');
+        const pkgItem = this.controller.createTestItem(pkgId, packageName ? `{ } ${packageName}` : '(default package)');
         this.packageItems.set(pkgId, pkgItem);
 
         // --- Pass 1: create a TestItem for every class (root and nested) ---
@@ -194,7 +194,7 @@ export class TestTreeBuilder {
 
             const classItem = this.controller.createTestItem(
                 classId,
-                cls.displayName ?? simpleName,
+                cls.displayName ? `⬡ ${cls.displayName}` : `⬡ ${simpleName}`,
                 classUri,
             );
 
@@ -254,7 +254,7 @@ export class TestTreeBuilder {
         const methodId = `${classId}#${method.name}`;
         const methodItem = this.controller.createTestItem(
             methodId,
-            method.displayName ?? method.name,
+            method.displayName ? `⬧ ${method.displayName}` : `⬧ ${method.name}()`,
             classUri,
         );
         const zeroBasedLine = Math.max(0, method.line - 1);
