@@ -57,6 +57,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Auto-refresh when Java test files are added, removed, or renamed
     let refreshDebounce: NodeJS.Timeout | undefined;
     const scheduleAutoRefresh = () => {
+        if (!readSettings().autoRefreshOnSave) {
+            return;
+        }
         if (refreshDebounce) {
             clearTimeout(refreshDebounce);
         }

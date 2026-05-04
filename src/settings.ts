@@ -12,6 +12,7 @@ import {
     CONFIG_TEST_METHOD_COMMAND_TEMPLATE,
     CONFIG_MULTI_MODULE_MODE,
     CONFIG_SHOW_OUTPUT_CHANNEL,
+    CONFIG_AUTO_REFRESH_ON_SAVE,
     SUREFIRE_GLOB,
     FAILSAFE_GLOB,
     DEFAULT_CLASS_TEMPLATE,
@@ -32,6 +33,7 @@ export interface ExtensionSettings {
     readonly testMethodCommandTemplate: string;
     readonly multiModuleMode: MultiModuleMode;
     readonly showOutputChannel: boolean;
+    readonly autoRefreshOnSave: boolean;
 }
 
 export function readSettings(): ExtensionSettings {
@@ -48,5 +50,6 @@ export function readSettings(): ExtensionSettings {
         testMethodCommandTemplate: cfg.get<string>(CONFIG_TEST_METHOD_COMMAND_TEMPLATE, DEFAULT_METHOD_TEMPLATE),
         multiModuleMode: cfg.get<MultiModuleMode>(CONFIG_MULTI_MODULE_MODE, 'auto'),
         showOutputChannel: cfg.get<boolean>(CONFIG_SHOW_OUTPUT_CHANNEL, true),
+        autoRefreshOnSave: cfg.get<boolean>(CONFIG_AUTO_REFRESH_ON_SAVE, true),
     };
 }

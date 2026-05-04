@@ -14,6 +14,7 @@ export const CONFIG_TEST_CLASS_COMMAND_TEMPLATE = 'testClassCommandTemplate';
 export const CONFIG_TEST_METHOD_COMMAND_TEMPLATE = 'testMethodCommandTemplate';
 export const CONFIG_MULTI_MODULE_MODE = 'multiModuleMode';
 export const CONFIG_SHOW_OUTPUT_CHANNEL = 'showOutputChannel';
+export const CONFIG_AUTO_REFRESH_ON_SAVE = 'autoRefreshOnSave';
 
 // Command IDs
 export const CMD_REFRESH_TESTS = 'mavenTestExplorer.refreshTests';

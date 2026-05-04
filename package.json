@@ -140,6 +140,11 @@
           "type": "boolean",
           "default": true,
           "description": "Reveal the Maven Test Explorer output channel when a test run starts."
+        },
+        "mavenTestExplorer.autoRefreshOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh the test tree when Java test files are created, deleted, or saved."
         }
       }
     }
