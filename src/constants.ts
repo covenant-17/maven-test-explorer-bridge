@@ -15,8 +15,13 @@ export const CONFIG_TEST_METHOD_COMMAND_TEMPLATE = 'testMethodCommandTemplate';
 export const CONFIG_MULTI_MODULE_MODE = 'multiModuleMode';
 export const CONFIG_SHOW_OUTPUT_CHANNEL = 'showOutputChannel';
 export const CONFIG_AUTO_REFRESH_ON_SAVE = 'autoRefreshOnSave';
+export const CONFIG_AUTO_REFRESH_DEBOUNCE_MS = 'autoRefreshDebounceMs';
 export const CONFIG_SHOW_STATS = 'showStats';
 export const CONFIG_STATS_FORMAT = 'statsFormat';
+export const CONFIG_MAX_HISTORY_ENTRIES = 'maxHistoryEntries';
+export const CONFIG_RUN_HISTORY_ENABLED = 'runHistoryEnabled';
+export const CONFIG_TEST_SOURCE_GLOBS = 'testSourceGlobs';
+export const CONFIG_PREFER_MAVEN_WRAPPER = 'preferMavenWrapper';
 
 export const DEFAULT_STATS_FORMAT = '| ✓{passed} | ✗{failed} | ● {total} | T ';
 

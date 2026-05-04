@@ -120,6 +120,27 @@ export function clearReportDirectories(moduleDir: string): void {
     }
 }
 
+/**
+ * Resolves the Maven executable to use for the given module directory.
+ * When preferMavenWrapper is enabled, searches for mvnw / mvnw.cmd in the
+ * module directory and its immediate parent (to support multi-module layouts).
+ * Falls back to settings.mavenExecutable if no wrapper is found.
+ */
+export function resolveExecutable(settings: ExtensionSettings, moduleDir: string): string {
+    if (!settings.preferMavenWrapper) {
+        return settings.mavenExecutable;
+    }
+    const wrapperName = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
+    const candidates = [moduleDir, path.dirname(moduleDir)];
+    for (const dir of candidates) {
+        const wrapperPath = path.join(dir, wrapperName);
+        if (fs.existsSync(wrapperPath)) {
+            return wrapperPath;
+        }
+    }
+    return settings.mavenExecutable;
+}
+
 // -------------------------------------------------------------------------
 // Private helpers
 // -------------------------------------------------------------------------

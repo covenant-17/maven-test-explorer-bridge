@@ -41,12 +41,26 @@ const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private)\s+)?(?:static\s+)?
  * Scans all Java test source files inside the given module directory.
  * Returns one TestClassInfo per class (including @Nested inner classes).
  */
-export async function scanTestFiles(moduleDir: string): Promise<TestClassInfo[]> {
-    const pattern = new vscode.RelativePattern(moduleDir, JAVA_TEST_GLOB);
-    const uris = await vscode.workspace.findFiles(pattern);
+export async function scanTestFiles(
+    moduleDir: string,
+    globs: readonly string[] = [JAVA_TEST_GLOB],
+): Promise<TestClassInfo[]> {
+    const seen = new Set<string>();
+    const allUris: vscode.Uri[] = [];
+
+    for (const glob of globs) {
+        const pattern = new vscode.RelativePattern(moduleDir, glob);
+        const found = await vscode.workspace.findFiles(pattern);
+        for (const uri of found) {
+            if (!seen.has(uri.fsPath)) {
+                seen.add(uri.fsPath);
+                allUris.push(uri);
+            }
+        }
+    }
 
     const results: TestClassInfo[] = [];
-    for (const uri of uris) {
+    for (const uri of allUris) {
         results.push(...parseJavaTestFile(uri.fsPath));
     }
     return results;

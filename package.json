@@ -77,87 +77,138 @@
         }
       ]
     },
-    "configuration": {
-      "title": "Maven Test Explorer Bridge",
-      "properties": {
-        "mavenTestExplorer.mavenExecutable": {
-          "type": "string",
-          "default": "mvn",
-          "description": "Path to the Maven executable (e.g. 'mvn' or '/usr/local/bin/mvn')."
-        },
-        "mavenTestExplorer.defaultCommand": {
-          "type": "string",
-          "default": "clean test",
-          "description": "Maven goals to run when executing tests (e.g. 'clean test')."
-        },
-        "mavenTestExplorer.defaultProfiles": {
-          "type": "array",
-          "items": { "type": "string" },
-          "default": [],
-          "description": "Maven profiles to activate by default (e.g. [\"dev\", \"ci\"])."
-        },
-        "mavenTestExplorer.additionalArgs": {
-          "type": "string",
-          "default": "",
-          "description": "Additional arguments appended to every Maven command (e.g. '-Denv=dev01 -Dheadless=false')."
-        },
-        "mavenTestExplorer.reportGlobs": {
-          "type": "array",
-          "items": { "type": "string" },
-          "default": [
-            "**/target/surefire-reports/TEST-*.xml",
-            "**/target/failsafe-reports/TEST-*.xml"
-          ],
-          "description": "Glob patterns for Surefire/Failsafe XML report files."
-        },
-        "mavenTestExplorer.watchReports": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically update Test Explorer when report XML files change."
-        },
-        "mavenTestExplorer.clearReportsBeforeRun": {
-          "type": "boolean",
-          "default": true,
-          "description": "Delete existing surefire-reports before running tests to prevent stale results."
-        },
-        "mavenTestExplorer.testClassCommandTemplate": {
-          "type": "string",
-          "default": "{maven} {profiles} {args} -Dtest={className} test",
-          "description": "Template for running a single test class. Placeholders: {maven}, {profiles}, {args}, {className}."
-        },
-        "mavenTestExplorer.testMethodCommandTemplate": {
-          "type": "string",
-          "default": "{maven} {profiles} {args} -Dtest={className}#{methodName} test",
-          "description": "Template for running a single test method. Placeholders: {maven}, {profiles}, {args}, {className}, {methodName}."
-        },
-        "mavenTestExplorer.multiModuleMode": {
-          "type": "string",
-          "enum": ["auto", "root", "perModule"],
-          "default": "auto",
-          "description": "How to handle multi-module Maven projects. 'auto' detects automatically."
-        },
-        "mavenTestExplorer.showOutputChannel": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reveal the Maven Test Explorer output channel when a test run starts."
-        },
-        "mavenTestExplorer.autoRefreshOnSave": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically refresh the test tree when Java test files are created, deleted, or saved."
-        },
-        "mavenTestExplorer.showStats": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show pass/fail aggregate counts next to each node in the test tree."
-        },
-        "mavenTestExplorer.statsFormat": {
-          "type": "string",
-          "default": "| ✓{passed} | ✗{failed} | ● {total} | T ",
-          "description": "Format string for aggregate stats shown on test tree nodes. Available placeholders: {passed} — passed count, {failed} — failed + error count, {error} — error count (raw), {skipped} — skipped count, {total} — total count."
+    "configuration": [
+      {
+        "title": "Test Discovery",
+        "properties": {
+          "mavenTestExplorer.mavenExecutable": {
+            "type": "string",
+            "default": "mvn",
+            "description": "Path to the Maven executable (e.g. 'mvn' or '/usr/local/bin/mvn')."
+          },
+          "mavenTestExplorer.preferMavenWrapper": {
+            "type": "boolean",
+            "default": true,
+            "description": "Use mvnw / mvnw.cmd (Maven Wrapper) if found in the module or its parent directory, instead of the global Maven executable."
+          },
+          "mavenTestExplorer.multiModuleMode": {
+            "type": "string",
+            "enum": ["auto", "root", "perModule"],
+            "default": "auto",
+            "description": "How to handle multi-module Maven projects. 'auto' detects automatically."
+          },
+          "mavenTestExplorer.testSourceGlobs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["**/src/test/java/**/*.java"],
+            "description": "Glob patterns for Java test source files. Add extra patterns for non-standard source directories (e.g. '**/src/it/java/**/*.java')."
+          },
+          "mavenTestExplorer.autoRefreshOnSave": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "description": "Automatically refresh the test tree when Java test files are created, deleted, or saved."
+          },
+          "mavenTestExplorer.autoRefreshDebounceMs": {
+            "type": "number",
+            "default": 500,
+            "minimum": 100,
+            "maximum": 5000,
+            "order": 2,
+            "description": "Delay in milliseconds before the test tree is refreshed after a file change. Increase on large projects or slow machines."
+          }
+        }
+      },
+      {
+        "title": "Test Execution",
+        "properties": {
+          "mavenTestExplorer.defaultCommand": {
+            "type": "string",
+            "default": "clean test",
+            "description": "Maven goals to run when executing tests (e.g. 'clean test')."
+          },
+          "mavenTestExplorer.defaultProfiles": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Maven profiles to activate by default (e.g. [\"dev\", \"ci\"])."
+          },
+          "mavenTestExplorer.additionalArgs": {
+            "type": "string",
+            "default": "",
+            "description": "Additional arguments appended to every Maven command (e.g. '-Denv=dev01 -Dheadless=false')."
+          },
+          "mavenTestExplorer.clearReportsBeforeRun": {
+            "type": "boolean",
+            "default": true,
+            "description": "Delete existing surefire-reports before running tests to prevent stale results."
+          },
+          "mavenTestExplorer.testClassCommandTemplate": {
+            "type": "string",
+            "default": "{maven} {profiles} {args} -Dtest={className} test",
+            "description": "Template for running a single test class. Placeholders: {maven}, {profiles}, {args}, {className}."
+          },
+          "mavenTestExplorer.testMethodCommandTemplate": {
+            "type": "string",
+            "default": "{maven} {profiles} {args} -Dtest={className}#{methodName} test",
+            "description": "Template for running a single test method. Placeholders: {maven}, {profiles}, {args}, {className}, {methodName}."
+          }
+        }
+      },
+      {
+        "title": "Results & Display",
+        "properties": {
+          "mavenTestExplorer.showOutputChannel": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically reveal the Maven output panel when a test run starts."
+          },
+          "mavenTestExplorer.showStats": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show pass/fail aggregate counts next to each node in the test tree."
+          },
+          "mavenTestExplorer.statsFormat": {
+            "type": "string",
+            "default": "| ✓{passed} | ✗{failed} | ● {total} | T ",
+            "description": "Format string for aggregate stats shown on test tree nodes. Available placeholders: {passed} — passed count, {failed} — failed + error count, {error} — error count (raw), {skipped} — skipped count, {total} — total count."
+          },
+          "mavenTestExplorer.reportGlobs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [
+              "**/target/surefire-reports/TEST-*.xml",
+              "**/target/failsafe-reports/TEST-*.xml"
+            ],
+            "description": "Glob patterns for Surefire/Failsafe XML report files."
+          },
+          "mavenTestExplorer.watchReports": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically update Test Explorer when report XML files change (external Maven runs)."
+          }
+        }
+      },
+      {
+        "title": "Run History",
+        "properties": {
+          "mavenTestExplorer.runHistoryEnabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "description": "Save test runs to history for later review via the History button."
+          },
+          "mavenTestExplorer.maxHistoryEntries": {
+            "type": "number",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100,
+            "order": 2,
+            "description": "Maximum number of test run history entries to keep."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "compile": "npm run check-types && node esbuild.js",

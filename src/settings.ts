@@ -13,9 +13,15 @@ import {
     CONFIG_MULTI_MODULE_MODE,
     CONFIG_SHOW_OUTPUT_CHANNEL,
     CONFIG_AUTO_REFRESH_ON_SAVE,
+    CONFIG_AUTO_REFRESH_DEBOUNCE_MS,
     CONFIG_SHOW_STATS,
     CONFIG_STATS_FORMAT,
+    CONFIG_MAX_HISTORY_ENTRIES,
+    CONFIG_RUN_HISTORY_ENABLED,
+    CONFIG_TEST_SOURCE_GLOBS,
+    CONFIG_PREFER_MAVEN_WRAPPER,
     DEFAULT_STATS_FORMAT,
+    JAVA_TEST_GLOB,
     SUREFIRE_GLOB,
     FAILSAFE_GLOB,
     DEFAULT_CLASS_TEMPLATE,
@@ -39,6 +45,11 @@ export interface ExtensionSettings {
     readonly autoRefreshOnSave: boolean;
     readonly showStats: boolean;
     readonly statsFormat: string;
+    readonly maxHistoryEntries: number;
+    readonly runHistoryEnabled: boolean;
+    readonly testSourceGlobs: readonly string[];
+    readonly preferMavenWrapper: boolean;
+    readonly autoRefreshDebounceMs: number;
 }
 
 export function readSettings(): ExtensionSettings {
@@ -58,5 +69,10 @@ export function readSettings(): ExtensionSettings {
         autoRefreshOnSave: cfg.get<boolean>(CONFIG_AUTO_REFRESH_ON_SAVE, true),
         showStats: cfg.get<boolean>(CONFIG_SHOW_STATS, true),
         statsFormat: cfg.get<string>(CONFIG_STATS_FORMAT, DEFAULT_STATS_FORMAT),
+        maxHistoryEntries: cfg.get<number>(CONFIG_MAX_HISTORY_ENTRIES, 20),
+        runHistoryEnabled: cfg.get<boolean>(CONFIG_RUN_HISTORY_ENABLED, true),
+        testSourceGlobs: cfg.get<string[]>(CONFIG_TEST_SOURCE_GLOBS, [JAVA_TEST_GLOB]),
+        preferMavenWrapper: cfg.get<boolean>(CONFIG_PREFER_MAVEN_WRAPPER, true),
+        autoRefreshDebounceMs: cfg.get<number>(CONFIG_AUTO_REFRESH_DEBOUNCE_MS, 500),
     };
 }

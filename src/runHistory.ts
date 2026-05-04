@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { SuiteResult, TestCaseStatus } from './surefireParser';
+import { readSettings } from './settings';
 
 const HISTORY_STATE_KEY = 'mavenTestExplorer.runHistory';
-const MAX_HISTORY_ENTRIES = 20;
 
 export interface RunHistoryEntry {
     readonly id: string;
@@ -61,7 +61,7 @@ export function saveRunToHistory(
 
     const entry: RunHistoryEntry = { id: `run-${timestamp}`, label, timestamp, source, suiteResults };
     const history = loadHistory(context);
-    const updated = [entry, ...history].slice(0, MAX_HISTORY_ENTRIES);
+    const updated = [entry, ...history].slice(0, readSettings().maxHistoryEntries);
     context.workspaceState.update(HISTORY_STATE_KEY, updated);
 }
 

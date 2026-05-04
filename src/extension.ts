@@ -13,6 +13,7 @@ import {
     buildRunMethodArgs,
     buildRerunFailedArgs,
     clearReportDirectories,
+    resolveExecutable,
 } from './mavenRunner';
 import { readSettings } from './settings';
 import {
@@ -149,12 +150,12 @@ async function runHandler(
 
         let args: string[];
         if (classNames.length === 0) {
-            args = buildRunAllArgs(settings);
+            args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
         } else if (classNames.length === 1 && classNames[0].includes('#')) {
             const [className, methodName] = classNames[0].split('#');
-            args = buildRunMethodArgs(settings, className, methodName);
+            args = buildRunMethodArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, className, methodName);
         } else {
-            args = buildRunClassArgs(settings, classNames.join('+'));
+            args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, classNames.join('+'));
         }
 
         const result = await runMaven(module.moduleDir, args, outputChannel, token);
@@ -167,7 +168,9 @@ async function runHandler(
         }
     }
 
-    saveRunToHistory(context, allSuiteResults, 'UI Run');
+    if (settings.runHistoryEnabled) {
+        saveRunToHistory(context, allSuiteResults, 'UI Run');
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -200,7 +203,7 @@ function registerCommands(
                 if (settings.clearReportsBeforeRun) {
                     clearReportDirectories(module.moduleDir);
                 }
-                const args = buildRunAllArgs(settings);
+                const args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
                 const result = await runMaven(module.moduleDir, args, outputChannel, token);
                 if (!result.cancelled) {
                     const suiteResults = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
@@ -209,7 +212,9 @@ function registerCommands(
                     allRunAllResults.push(...suiteResults);
                 }
             }
-            saveRunToHistory(context, allRunAllResults, 'Run All');
+            if (settings.runHistoryEnabled) {
+                saveRunToHistory(context, allRunAllResults, 'Run All');
+            }
         }),
 
         vscode.commands.registerCommand(CMD_RERUN_FAILED, async () => {
@@ -224,7 +229,7 @@ function registerCommands(
             const token = new vscode.CancellationTokenSource().token;
             const allRerunResults: SuiteResult[] = [];
             for (const module of modules) {
-                const args = buildRerunFailedArgs(settings, lastFailedClassNames);
+                const args = buildRerunFailedArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, lastFailedClassNames);
                 const result = await runMaven(module.moduleDir, args, outputChannel, token);
                 if (!result.cancelled) {
                     const suiteResults = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
@@ -233,7 +238,9 @@ function registerCommands(
                     allRerunResults.push(...suiteResults);
                 }
             }
-            saveRunToHistory(context, allRerunResults, 'Rerun Failed');
+            if (settings.runHistoryEnabled) {
+                saveRunToHistory(context, allRerunResults, 'Rerun Failed');
+            }
         }),
 
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, () => {
@@ -324,10 +331,11 @@ async function buildTree(
     modules: readonly MavenModule[],
     outputChannel: vscode.OutputChannel,
 ): Promise<void> {
+    const { testSourceGlobs } = readSettings();
     const modulesWithClasses: Array<{ module: MavenModule; classes: Awaited<ReturnType<typeof scanTestFiles>> }> = [];
 
     for (const module of modules) {
-        const classes = await scanTestFiles(module.moduleDir);
+        const classes = await scanTestFiles(module.moduleDir, testSourceGlobs);
         modulesWithClasses.push({ module, classes });
         outputChannel.appendLine(
             `[Discovery] ${module.artifactId}: ${classes.length} test class(es)`,

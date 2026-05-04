@@ -99,5 +99,7 @@ function flushReports(
 
     // External run: persist = false (results come from outside VS Code)
     publishResults(controller, treeBuilder, results, outputChannel, undefined);
-    saveRunToHistory(context, results, 'External (watcher)');
+    if (readSettings().runHistoryEnabled) {
+        saveRunToHistory(context, results, 'External (watcher)');
+    }
 }
