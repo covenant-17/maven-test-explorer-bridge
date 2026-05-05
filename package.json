@@ -170,7 +170,7 @@
           },
           "mavenTestExplorer.statsFormat": {
             "type": "string",
-            "default": "| ✓{passed} | ✗{failed} | ● {total} | T ",
+            "default": "| ✓{passed} | ✗{failed} | ● {total}",
             "description": "Format string for aggregate stats shown on test tree nodes. Available placeholders: {passed} — passed count, {failed} — failed + error count, {error} — error count (raw), {skipped} — skipped count, {total} — total count."
           },
           "mavenTestExplorer.reportGlobs": {

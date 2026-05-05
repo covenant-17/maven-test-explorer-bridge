@@ -23,7 +23,7 @@ export const CONFIG_RUN_HISTORY_ENABLED = 'runHistoryEnabled';
 export const CONFIG_TEST_SOURCE_GLOBS = 'testSourceGlobs';
 export const CONFIG_PREFER_MAVEN_WRAPPER = 'preferMavenWrapper';
 
-export const DEFAULT_STATS_FORMAT = '| ✓{passed} | ✗{failed} | ● {total} | T ';
+export const DEFAULT_STATS_FORMAT = '| ✓{passed} | ✗{failed} | ● {total}';
 
 // Command IDs
 export const CMD_REFRESH_TESTS = 'mavenTestExplorer.refreshTests';
