@@ -161,10 +161,7 @@ function buildProfileFlags(profiles: readonly string[]): string[] {
 }
 
 function splitArgs(argsString: string): string[] {
-    return argsString
-        .trim()
-        .split(/\s+/)
-        .filter((s) => s.length > 0);
+    return tokenizeArgs(argsString);
 }
 
 function applyTemplate(
@@ -182,6 +179,18 @@ function applyTemplate(
         .replace('{className}', vars.className)
         .replace('{methodName}', vars.methodName ?? '');
 
-    // Remove consecutive spaces and empty tokens introduced by empty placeholders
-    return expanded.split(/\s+/).filter((s) => s.length > 0);
+    // Parse template output while preserving quoted arguments (e.g. paths with spaces).
+    return tokenizeArgs(expanded);
+}
+
+function tokenizeArgs(value: string): string[] {
+    const tokens: string[] = [];
+    const re = /"([^"]*)"|'([^']*)'|([^\s]+)/g;
+    for (const match of value.matchAll(re)) {
+        const token = match[1] ?? match[2] ?? match[3];
+        if (token && token.length > 0) {
+            tokens.push(token);
+        }
+    }
+    return tokens;
 }
