@@ -19,16 +19,25 @@ const STACK_FRAME_PATTERN = /at\s+([\w.$]+)\.([\w$<>]+)\((\S+\.java):(\d+)\)/g;
  *                     If undefined (watcher/external run), a fresh request is created and not persisted.
  */
 export function publishResults(
-    controller: vscode.TestController,
+    controller: vscode.TestController | undefined,
     treeBuilder: TestTreeBuilder,
     suiteResults: readonly SuiteResult[],
     outputChannel: vscode.OutputChannel,
     runRequest?: vscode.TestRunRequest,
     persist?: boolean,
-): void {
-    const request = runRequest ?? new vscode.TestRunRequest();
-    const shouldPersist = persist ?? (runRequest !== undefined);
-    const run = controller.createTestRun(request, 'Maven Surefire Results', shouldPersist);
+    existingRun?: vscode.TestRun,
+    sharedInvocationCounts?: Map<string, number>,
+): Set<string> {
+    const resolvedItemIds = new Set<string>();
+    const ownRun = existingRun === undefined;
+    let run: vscode.TestRun;
+    if (existingRun) {
+        run = existingRun;
+    } else {
+        const request = runRequest ?? new vscode.TestRunRequest();
+        const shouldPersist = persist ?? (runRequest !== undefined);
+        run = controller!.createTestRun(request, 'Maven Surefire Results', shouldPersist);
+    }
 
     let totalPassed = 0;
     let totalFailed = 0;
@@ -36,9 +45,15 @@ export function publishResults(
     let totalError = 0;
 
     try {
+        // If a shared map is provided (UI run across multiple XML files), use it so
+        // Surefire's duplication of parent-class tests into nested-class XMLs is
+        // suppressed — each unique classname#method is only reported once per run.
+        // For standalone calls (external watcher), create a fresh per-file map.
+        const invocationCounts = sharedInvocationCounts ?? new Map<string, number>();
         for (const suite of suiteResults) {
             for (const tc of suite.testCases) {
-                reportTestCase(run, treeBuilder, tc, outputChannel);
+                const item = reportTestCase(run, treeBuilder, tc, outputChannel, invocationCounts);
+                if (item) { resolvedItemIds.add(item.id); }
                 switch (tc.status) {
                     case 'passed':  totalPassed++;  break;
                     case 'failed':  totalFailed++;  break;
@@ -48,7 +63,9 @@ export function publishResults(
             }
         }
     } finally {
-        run.end();
+        if (ownRun) {
+            run.end();
+        }
     }
 
     const total = totalPassed + totalFailed + totalError + totalSkipped;
@@ -57,7 +74,13 @@ export function publishResults(
         `${totalPassed} passed, ${totalFailed} failed, ${totalError} errors, ${totalSkipped} skipped`,
     );
 
-    treeBuilder.updateAggregates(suiteResults);
+    // Skip aggregates when publishing a partial real-time batch (caller will
+    // invoke updateAggregates once at the end with the full result set).
+    if (!existingRun) {
+        treeBuilder.updateAggregates(suiteResults);
+    }
+
+    return resolvedItemIds;
 }
 
 // -------------------------------------------------------------------------
@@ -69,14 +92,33 @@ function reportTestCase(
     treeBuilder: TestTreeBuilder,
     tc: TestCaseResult,
     outputChannel: vscode.OutputChannel,
-): void {
-    const item = treeBuilder.findMethodItem(tc.className, tc.methodName)
-        ?? treeBuilder.findClassItem(tc.className);
+    invocationCounts: Map<string, number>,
+): vscode.TestItem | undefined {
+    // For @TestFactory: the same method name appears multiple times in the XML.
+    // Track invocation count and suffix with [N] for N > 1 so each dynamic
+    // test gets its own TestItem in the run counter.
+    // For @ParameterizedTest: XML already contains unique names like
+    // "greetMultipleNames(String)[1]" — those go through getOrCreateMethodItem
+    // as-is and each gets its own dynamic TestItem.
+    const baseKey = `${tc.className}#${tc.methodName}`;
+    const count = (invocationCounts.get(baseKey) ?? 0) + 1;
+    invocationCounts.set(baseKey, count);
+    const effectiveName = count > 1 ? `${tc.methodName}[${count}]` : tc.methodName;
+
+    // Try static method item first, then dynamically create one (handles
+    // inherited tests and @TestFactory dynamic tests missing from the scan).
+    const item = treeBuilder.findMethodItem(tc.className, effectiveName)
+        ?? treeBuilder.getOrCreateMethodItem(tc.className, effectiveName);
 
     if (!item) {
-        outputChannel.appendLine(`[Results] No TestItem found for: ${tc.className}#${tc.methodName}`);
-        return;
+        outputChannel.appendLine(`[Results] NO ITEM: ${tc.className}#${effectiveName} (raw: ${tc.methodName})`);
+        return undefined;
     }
+
+    // Ensure item is marked as started — dynamically created items (inherited tests,
+    // @TestFactory, parameterized) are not pre-started in runHandler, so VS Code
+    // won't include them in the run counter unless we start them here.
+    run.started(item);
 
     appendTestOutput(run, item, tc);
 
@@ -100,6 +142,8 @@ function reportTestCase(
             break;
         }
     }
+
+    return item;
 }
 
 function buildTestMessage(tc: TestCaseResult, item: vscode.TestItem): vscode.TestMessage {

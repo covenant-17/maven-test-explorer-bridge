@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
 import { scanTestFiles } from './javaTestScanner';
 import { TestTreeBuilder } from './testTreeBuilder';
@@ -30,6 +31,7 @@ import {
     CMD_SHOW_HISTORY,
 } from './constants';
 import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
+import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
 
 // Tracks failed class names across runs for the "Re-run Failed" command
 let lastFailedClassNames: string[] = [];
@@ -141,34 +143,112 @@ async function runHandler(
     const targetModules = resolveTargetModules(request, treeBuilder, modules);
     const allSuiteResults: SuiteResult[] = [];
 
-    for (const { module, classNames } of targetModules) {
-        if (token.isCancellationRequested) {
-            break;
-        }
+    // Create the TestRun upfront so we can show enqueued/started states
+    const run = controller.createTestRun(request, 'Maven Surefire Results', true);
 
-        if (settings.clearReportsBeforeRun) {
-            clearReportDirectories(module.moduleDir);
-            outputChannel.appendLine(`[Runner] Cleared reports in: ${module.moduleDir}`);
+    // Recursively collect leaf (method) items from a TestItem subtree
+    const collectLeaves = (item: vscode.TestItem): vscode.TestItem[] => {
+        if (item.children.size === 0) {
+            return [item];
         }
+        const leaves: vscode.TestItem[] = [];
+        item.children.forEach((child) => leaves.push(...collectLeaves(child)));
+        return leaves;
+    };
 
-        let args: string[];
-        if (classNames.length === 0) {
-            args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
-        } else if (classNames.length === 1 && classNames[0].includes('#')) {
-            const [className, methodName] = classNames[0].split('#');
-            args = buildRunMethodArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, className, methodName);
-        } else {
-            args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, classNames.join('+'));
+    // Enqueue everything that will run
+    const allLeaves = request.include
+        ? request.include.flatMap(collectLeaves)
+        : treeBuilder.getAllMethodItems();
+    for (const item of allLeaves) {
+        run.enqueued(item);
+    }
+
+    try {
+        for (const { module, classNames } of targetModules) {
+            if (token.isCancellationRequested) {
+                break;
+            }
+
+            // Mark this module's items as started (spinning indicator)
+            const moduleLeaves = request.include
+                ? request.include
+                    .filter((item) => item.id === module.artifactId || item.id.startsWith(`${module.artifactId}/`))
+                    .flatMap(collectLeaves)
+                : treeBuilder.getMethodItemsForModule(module.artifactId);
+            outputChannel.appendLine(`[Runner] Pre-starting ${moduleLeaves.length} static items`);
+            for (const item of moduleLeaves) {
+                run.started(item);
+            }
+
+            if (settings.clearReportsBeforeRun) {
+                clearReportDirectories(module.moduleDir);
+                outputChannel.appendLine(`[Runner] Cleared reports in: ${module.moduleDir}`);
+            }
+
+            let args: string[];
+            if (classNames.length === 0) {
+                args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
+            } else if (classNames.length === 1 && classNames[0].includes('#')) {
+                const [className, methodName] = classNames[0].split('#');
+                args = buildRunMethodArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, className, methodName);
+            } else {
+                args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, classNames.join('+'));
+            }
+
+            // Start watching report dirs — publishes results in real time as XMLs appear
+            const { stop: stopWatch, claimedXmlPaths } = watchReportDirsForRun(
+                module.moduleDir, settings.reportGlobs, run, treeBuilder, outputChannel,
+            );
+
+            const result = await runMaven(module.moduleDir, args, outputChannel, token);
+
+            // Stop the watcher; any in-flight 150ms parse timers become irrelevant — we
+            // republish everything below from readAllReports as the single source of truth.
+            stopWatch();
+
+            if (!result.cancelled) {
+                // Republish ALL report files to the run.
+                const allAfter = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
+                const resolvedIds = new Set<string>();
+                // Shared map across all XML files: prevents double-counting parent-class
+                // tests that Surefire duplicates into each nested-class XML file.
+                const sharedInvocationCounts = new Map<string, number>();
+                let totalTcCount = 0;
+                let totalPassed = 0, totalFailed = 0, totalError = 0, totalSkipped = 0;
+                for (const r of allAfter) {
+                    totalTcCount += r.testCases.length;
+                    for (const tc of r.testCases) {
+                        switch (tc.status) {
+                            case 'passed':  totalPassed++;  break;
+                            case 'failed':  totalFailed++;  break;
+                            case 'error':   totalError++;   break;
+                            case 'skipped': totalSkipped++; break;
+                        }
+                    }
+                    const ids = publishResults(undefined, treeBuilder, [r], outputChannel, undefined, false, run, sharedInvocationCounts);
+                    ids.forEach((id) => resolvedIds.add(id));
+                }
+                outputChannel.appendLine(`[Runner] Total testcases in XML: ${totalTcCount}, resolved items: ${resolvedIds.size}`);
+                const counted = totalPassed + totalFailed + totalError;
+                const pct = counted > 0 ? ((totalPassed / counted) * 100).toFixed(1) : '0.0';
+                const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
+                const summary = `\r\n✔ ${totalPassed}  ✘ ${totalFailed + totalError}  ⊘ ${totalSkipped}  │  ${totalPassed}/${counted} passed` +
+                    (totalSkipped > 0 ? `  (${totalSkipped} skipped not counted)` : '') + `\r\n`;
+                run.appendOutput(summary);
+                outputChannel.appendLine(`[Results] Summary: ${totalPassed}/${counted} tests passed (${pct}%${skippedNote})`);
+                registerUiRunXmlPaths(allAfter.map((r) => r.xmlPath));
+                lastFailedClassNames = collectFailedClasses(allAfter);
+                allSuiteResults.push(...allAfter);
+            } else {
+                // Cancelled — suppress external watcher for anything seen so far
+                registerUiRunXmlPaths(Array.from(claimedXmlPaths));
+            }
         }
-
-        const result = await runMaven(module.moduleDir, args, outputChannel, token);
-
-        if (!result.cancelled) {
-            const suiteResults = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-            publishResults(controller, treeBuilder, suiteResults, outputChannel, request);
-            lastFailedClassNames = collectFailedClasses(suiteResults);
-            allSuiteResults.push(...suiteResults);
-        }
+    } finally {
+        treeBuilder.updateAggregates(allSuiteResults);
+        run.end();
+        clearUiRunXmlPaths();
     }
 
     if (settings.runHistoryEnabled) {
@@ -347,6 +427,93 @@ async function buildTree(
     treeBuilder.buildTree(modulesWithClasses);
 }
 
+/**
+ * Watches the module directory recursively during a Maven run.
+ * Publishes results to the open TestRun as soon as each TEST-*.xml file appears.
+ * Using recursive watch on moduleDir survives Maven clean deleting/recreating target/.
+ * Returns a cleanup function and the set of XML paths claimed by this watcher.
+ */
+function watchReportDirsForRun(
+    moduleDir: string,
+    reportGlobs: readonly string[],
+    run: vscode.TestRun,
+    treeBuilder: TestTreeBuilder,
+    outputChannel: vscode.OutputChannel,
+): { stop: () => void; claimedXmlPaths: Set<string> } {
+    const seenFiles = new Set<string>();
+    const reportDirs = resolveReportDirs(moduleDir, reportGlobs);
+
+    // Normalise to forward-slash relative paths for comparison
+    const isInReportDir = (absolutePath: string): boolean => {
+        for (const dir of reportDirs) {
+            if (absolutePath.startsWith(dir + path.sep) || absolutePath.startsWith(dir + '/')) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    let watcher: fs.FSWatcher | undefined;
+    const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+    try {
+        watcher = fs.watch(moduleDir, { recursive: true }, (_eventType, filename) => {
+            if (!filename) {
+                return;
+            }
+            const basename = path.basename(filename);
+            if (!basename.startsWith('TEST-') || !basename.endsWith('.xml')) {
+                return;
+            }
+            const xmlPath = path.join(moduleDir, filename);
+            if (seenFiles.has(xmlPath)) {
+                return;
+            }
+            if (!isInReportDir(xmlPath)) {
+                return;
+            }
+            seenFiles.add(xmlPath);
+            // Register immediately so the external FileSystemWatcher's debounce
+            // finds this path already excluded when it fires ~500ms later.
+            registerUiRunXmlPaths([xmlPath]);
+            // Small delay — surefire may still be writing the file.
+            // Real-time preview only; the final authoritative publish happens via
+            // readAllReports after Maven exits, so no need to track collectedResults.
+            const timer = setTimeout(() => {
+                pendingTimers.delete(timer);
+                const result = parseReportFile(xmlPath);
+                if (result) {
+                    publishResults(undefined, treeBuilder, [result], outputChannel, undefined, false, run);
+                }
+            }, 150);
+            pendingTimers.add(timer);
+        });
+    } catch {
+        outputChannel.appendLine(`[Runner] Cannot watch module dir: ${moduleDir}`);
+    }
+
+    return {
+        stop: () => {
+            watcher?.close();
+            // Cancel pending parse timers so they don't fire after readAllReports
+            // republishes everything — prevents double-publishing the same files.
+            for (const t of pendingTimers) { clearTimeout(t); }
+            pendingTimers.clear();
+        },
+        claimedXmlPaths: seenFiles,
+    };
+}
+
+/** Extracts concrete report directory paths from glob patterns relative to moduleDir. */
+function resolveReportDirs(moduleDir: string, reportGlobs: readonly string[]): Set<string> {
+    const dirs = new Set<string>();
+    for (const glob of reportGlobs) {
+        const stripped = glob.replace(/^\*+\//, '');
+        const dir = stripped.includes('/') ? stripped.substring(0, stripped.lastIndexOf('/')) : stripped;
+        dirs.add(path.join(moduleDir, dir));
+    }
+    return dirs;
+}
+
 function readAllReports(
     moduleDir: string,
     reportGlobs: readonly string[],
@@ -355,17 +522,8 @@ function readAllReports(
     const results: SuiteResult[] = [];
     const nodefs = require('fs') as typeof import('fs');
 
-    // Convert globs to concrete paths by extracting the directory portion up to the first wildcard
-    // For standard patterns like '**/target/surefire-reports/TEST-*.xml' we resolve the report dir
-    // relative to moduleDir by stripping the leading '**/' and taking the parent of the file pattern.
-    const resolvedDirs = new Set<string>();
-    for (const glob of reportGlobs) {
-        // Strip leading '**/' or '*/' prefix
-        const stripped = glob.replace(/^\*+\//, '');
-        // Take the directory portion (everything before the last '/')
-        const dir = stripped.includes('/') ? stripped.substring(0, stripped.lastIndexOf('/')) : stripped;
-        resolvedDirs.add(path.join(moduleDir, dir));
-    }
+    // Convert globs to concrete paths
+    const resolvedDirs = resolveReportDirs(moduleDir, reportGlobs);
 
     for (const dir of resolvedDirs) {
         let files: string[];

@@ -71,6 +71,85 @@ export class TestTreeBuilder {
         return Array.from(this.methodItems.values());
     }
 
+    /** Returns all method-level TestItems belonging to a specific module. */
+    getMethodItemsForModule(artifactId: string): vscode.TestItem[] {
+        const prefix = `${artifactId}/`;
+        return Array.from(this.methodItems.values())
+            .filter((item) => item.id.startsWith(prefix));
+    }
+
+    /**
+     * Returns an existing method TestItem or creates a new one dynamically under
+     * the class item. Used for inherited and @TestFactory dynamic tests that are
+     * not present in the static source scan.
+     */
+    getOrCreateMethodItem(fqcn: string, methodName: string): vscode.TestItem | undefined {
+        const existing = this.methodItems.get(`${fqcn}#${methodName}`);
+        if (existing) {
+            return existing;
+        }
+        let classItem = this.classItems.get(fqcn);
+        if (!classItem) {
+            classItem = this.createDynamicClassItem(fqcn);
+        }
+        if (!classItem) {
+            return undefined;
+        }
+        const methodId = `${classItem.id}#${methodName}`;
+        const methodItem = this.controller.createTestItem(methodId, `⬧ ${methodName}()`, classItem.uri);
+        this.methodItems.set(`${fqcn}#${methodName}`, methodItem);
+        // Append to class children
+        const children: vscode.TestItem[] = [];
+        classItem.children.forEach((c) => children.push(c));
+        children.push(methodItem);
+        classItem.children.replace(children);
+        return methodItem;
+    }
+
+    /**
+     * Dynamically creates a class TestItem for a FQCN that was not discovered
+     * during static source scan (e.g. concrete subclasses, @TestFactory classes).
+     * Locates the parent package item by matching the package name portion of the FQCN.
+     */
+    private createDynamicClassItem(fqcn: string): vscode.TestItem | undefined {
+        // Strip nested suffix: "com.example.AppTest$Nested" → "com.example.AppTest"
+        const baseFqcn = fqcn.includes('$') ? fqcn.substring(0, fqcn.indexOf('$')) : fqcn;
+        const dotIdx = baseFqcn.lastIndexOf('.');
+        const packageName = dotIdx >= 0 ? baseFqcn.substring(0, dotIdx) : '';
+
+        // Find a matching package item in the existing tree
+        let pkgItem: vscode.TestItem | undefined;
+        let moduleId: string | undefined;
+        for (const [pkgKey, item] of this.packageItems) {
+            const slashIdx = pkgKey.indexOf('/');
+            const pkgPart = slashIdx >= 0 ? pkgKey.substring(slashIdx + 1) : pkgKey;
+            if (pkgPart === packageName) {
+                pkgItem = item;
+                moduleId = slashIdx >= 0 ? pkgKey.substring(0, slashIdx) : pkgKey;
+                break;
+            }
+        }
+        if (!pkgItem || !moduleId) {
+            return undefined;
+        }
+
+        // Build class ID using the same convention as buildClassItem
+        const classRelative = fqcn.substring(packageName.length > 0 ? packageName.length + 1 : 0);
+        const classId = `${moduleId}/${packageName}/${classRelative}`;
+        const simpleName = fqcn.includes('$') ? fqcn.split('$').pop()! : baseFqcn.substring(dotIdx + 1);
+
+        const classItem = this.controller.createTestItem(classId, `⬡ ${simpleName}`);
+        this.classItems.set(fqcn, classItem);
+
+        // Append to package children
+        const pkgChildren: vscode.TestItem[] = [];
+        pkgItem.children.forEach((c) => pkgChildren.push(c));
+        pkgChildren.push(classItem);
+        pkgItem.children.replace(pkgChildren);
+
+        return classItem;
+    }
+
     /**
      * Resets all test items to a neutral "not yet run" state.
      * Clears aggregate description labels from all tree nodes.

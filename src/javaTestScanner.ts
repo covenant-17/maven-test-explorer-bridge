@@ -32,10 +32,11 @@ interface ClassFrame {
 
 const PACKAGE_PATTERN = /^\s*package\s+([\w.]+)\s*;/m;
 const DISPLAY_NAME_PATTERN = /@DisplayName\s*\(\s*"([^"]+)"\s*\)/;
-const TEST_ANNOTATION_PATTERN = /@(?:Test|ParameterizedTest|RepeatedTest)\b/;
+const TEST_ANNOTATION_PATTERN = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b/;
 const NESTED_ANNOTATION_PATTERN = /@Nested\b/;
-const CLASS_DECL_PATTERN = /(?:^|\s)class\s+(\w+)/;
-const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private)\s+)?(?:static\s+)?(?:final\s+)?void\s+(\w+)\s*\(/;
+const CLASS_DECL_PATTERN = /(?:^|\s)(?:class|interface)\s+(\w+)/;
+// Matches @Test void method(), @TestFactory Stream<X> method(), default void method()
+const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private|default)\s+)?(?:static\s+)?(?:final\s+)?(?:void|\w[\w.<>,\s]*)\s+(\w+)\s*\(/;
 
 /**
  * Scans all Java test source files inside the given module directory.

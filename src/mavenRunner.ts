@@ -39,6 +39,14 @@ export function runMaven(
 
         proc.stdout.on('data', (chunk: Buffer) => {
             outputChannel.append(chunk.toString());
+            // TODO: Parse Surefire stdout lines in real time to mark failing methods immediately,
+            // without waiting for the XML report. Surefire prints failure lines as soon as each
+            // method finishes, e.g.:
+            //   [ERROR] com.example.AppTest.myTest -- Time elapsed: 0.003 s <<< FAILURE!
+            //   [ERROR] com.example.AppTest.myTest -- Time elapsed: 0.001 s <<< ERROR!
+            // Passing methods produce no per-method output — they can only be resolved from the
+            // XML at class completion. A streaming line parser here could call run.failed() /
+            // run.errored() immediately for the bad cases, giving faster feedback in the sidebar.
         });
 
         proc.stderr.on('data', (chunk: Buffer) => {

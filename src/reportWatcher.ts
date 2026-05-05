@@ -6,6 +6,21 @@ import { saveRunToHistory } from './runHistory';
 import { readSettings } from './settings';
 import { WATCHER_DEBOUNCE_MS } from './constants';
 
+// XML paths already published by the current UI-triggered run.
+// The external watcher skips these to avoid creating a duplicate TestRun.
+const _processedByUiRun = new Set<string>();
+
+/** Called by UI run: registers xmlPaths so the external watcher skips them. */
+export function registerUiRunXmlPaths(paths: readonly string[]): void {
+    for (const p of paths) { _processedByUiRun.add(p); }
+}
+
+/** Called by UI run when it finishes: clears the registry after a short delay
+ * so any straggling watcher events are still suppressed. */
+export function clearUiRunXmlPaths(): void {
+    setTimeout(() => _processedByUiRun.clear(), 1500);
+}
+
 /**
  * Starts file system watchers for Surefire/Failsafe XML report files.
  *
@@ -40,8 +55,9 @@ export function startReportWatcher(
 
         debounceTimer = setTimeout(() => {
             debounceTimer = undefined;
-            const paths = Array.from(pendingUris);
+            const paths = Array.from(pendingUris).filter((p) => !_processedByUiRun.has(p));
             pendingUris.clear();
+            if (paths.length === 0) { return; }
             flushReports(paths, controller, treeBuilder, outputChannel, context);
         }, WATCHER_DEBOUNCE_MS);
     }
