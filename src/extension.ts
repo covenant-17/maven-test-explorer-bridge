@@ -335,9 +335,13 @@ function registerCommands(
 
         vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, async () => {
             const settings = readSettings();
+            const resolvedExecutable = currentModules.length > 0
+                ? resolveExecutable(settings, currentModules[0].moduleDir)
+                : settings.mavenExecutable;
+            const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
             const args = lastFailedClassNames.length > 0
-                ? buildRerunFailedArgs(settings, lastFailedClassNames)
-                : buildRunAllArgs(settings);
+                ? buildRerunFailedArgs(effectiveSettings, lastFailedClassNames)
+                : buildRunAllArgs(effectiveSettings);
             const command = args.join(' ');
             await vscode.env.clipboard.writeText(command);
             vscode.window.showInformationMessage(`Copied: ${command}`);
