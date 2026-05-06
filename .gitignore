@@ -22,9 +22,6 @@ yarn-error.log*
 # Project planning docs
 plan/
 
-# Assets
-*.png
-
 # OS
 .DS_Store
 Thumbs.db
