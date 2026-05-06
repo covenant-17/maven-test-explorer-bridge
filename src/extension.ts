@@ -36,6 +36,8 @@ import {
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_SHOW_HISTORY,
+    CMD_ATTACH_CLASS_TO_CHAT,
+    CMD_ATTACH_METHOD_TO_CHAT,
 } from './constants';
 import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
 import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
@@ -705,6 +707,58 @@ function registerCommands(
                 );
             }
         }),
+
+        // Context menu: "Attach Class/Method to Copilot" — opens source with selection, attaches to chat, closes preview
+        ...([CMD_ATTACH_CLASS_TO_CHAT, CMD_ATTACH_METHOD_TO_CHAT] as const).map((cmdId) =>
+            vscode.commands.registerCommand(cmdId, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
+                if (!item?.uri) { return; }
+                const items = [item, ...rest].filter((i) => i?.uri);
+                for (const it of items) {
+                    const editor = await vscode.window.showTextDocument(it.uri!, {
+                        selection: it.range,
+                        preserveFocus: false,
+                        preview: true,
+                    });
+                    let selectionRange = it.range;
+                    // For class items (no range), find the class symbol range via document symbols
+                    if (!selectionRange) {
+                        const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                            'vscode.executeDocumentSymbolProvider', it.uri!,
+                        );
+                        if (symbols) {
+                            // item id: moduleId/package/ClassName — extract simple class name
+                            const parts = it.id.split('/');
+                            const simpleName = parts[parts.length - 1].split('$').pop() ?? '';
+                            const findSymbol = (list: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+                                for (const s of list) {
+                                    if (s.kind === vscode.SymbolKind.Class && s.name === simpleName) { return s; }
+                                    const found = findSymbol(s.children);
+                                    if (found) { return found; }
+                                }
+                                return undefined;
+                            };
+                            const sym = findSymbol(symbols);
+                            if (sym) { selectionRange = sym.range; }
+                        }
+                    }
+                    if (selectionRange) {
+                        editor.selection = new vscode.Selection(selectionRange.start, selectionRange.end);
+                        editor.revealRange(selectionRange, vscode.TextEditorRevealType.InCenter);
+                    }
+                    // Try all known AI assistant "attach selection" commands — ignore if not installed
+                    const aiAttachCommands = [
+                        'github.copilot.chat.attachSelection', // GitHub Copilot
+                        'chatgpt.addToThread',                 // OpenAI ChatGPT / Codex
+                        'claude-vscode.insertAtMention',       // Anthropic Claude Code
+                    ];
+                    for (const cmd of aiAttachCommands) {
+                        try { await vscode.commands.executeCommand(cmd); } catch { /* extension not active */ }
+                    }
+                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+                }
+                await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus');
+            }),
+        ),
     );
 }
 

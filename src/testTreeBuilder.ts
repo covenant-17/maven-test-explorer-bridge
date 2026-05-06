@@ -4,6 +4,9 @@ import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
 import { SuiteResult } from './surefireParser';
 import { readSettings } from './settings';
 
+export const TAG_CLASS = new vscode.TestTag('mavenTestExplorer.class');
+export const TAG_METHOD = new vscode.TestTag('mavenTestExplorer.method');
+
 /**
  * Builds and maintains the VS Code TestItem hierarchy.
  *
@@ -304,6 +307,7 @@ export class TestTreeBuilder {
                 cls.displayName ? `$(symbol-class) ${cls.displayName}` : `$(symbol-class) ${simpleName}`,
                 classUri,
             );
+            classItem.tags = [TAG_CLASS];
 
             const fqcn = buildFqcn(packageName, cls.className);
             this.classItems.set(fqcn, classItem);
@@ -364,6 +368,7 @@ export class TestTreeBuilder {
             method.displayName ? `$(symbol-method) ${method.displayName}` : `$(symbol-method) ${method.name}()`,
             classUri,
         );
+        methodItem.tags = [TAG_METHOD];
         const zeroBasedLine = Math.max(0, method.line - 1);
         methodItem.range = new vscode.Range(
             new vscode.Position(zeroBasedLine, 0),

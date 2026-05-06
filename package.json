@@ -102,6 +102,18 @@
         "title": "Maven: Show Run History",
         "category": "Maven Test Explorer",
         "icon": "$(history)"
+      },
+      {
+        "command": "mavenTestExplorer.attachClassToChat",
+        "title": "Attach Class to AI Chat",
+        "category": "Maven Test Explorer",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "mavenTestExplorer.attachMethodToChat",
+        "title": "Attach Method to AI Chat",
+        "category": "Maven Test Explorer",
+        "icon": "$(comment-discussion)"
       }
     ],
     "submenus": [],
@@ -110,6 +122,16 @@
         {
           "command": "mavenTestExplorer.copy",
           "group": "9_maven_copy@1"
+        },
+        {
+          "command": "mavenTestExplorer.attachClassToChat",
+          "group": "9_maven_copy@2",
+          "when": "testItem.tags contains 'mavenTestExplorer.class'"
+        },
+        {
+          "command": "mavenTestExplorer.attachMethodToChat",
+          "group": "9_maven_copy@2",
+          "when": "testItem.tags contains 'mavenTestExplorer.method'"
         }
       ],
       "view/title": [
