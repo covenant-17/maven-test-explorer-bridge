@@ -117,13 +117,24 @@ export function buildRerunFailedArgs(settings: ExtensionSettings, classNames: re
 }
 
 /**
- * Deletes the surefire-reports and failsafe-reports directories inside the given module directory.
+ * Deletes only TEST-*.xml files from surefire-reports and failsafe-reports directories.
+ * Avoids deleting JVM binary files (*.bin) that may still be locked by a running Java process.
  */
 export function clearReportDirectories(moduleDir: string): void {
     for (const reportDir of [SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR]) {
         const fullPath = path.join(moduleDir, reportDir);
-        if (fs.existsSync(fullPath)) {
-            fs.rmSync(fullPath, { recursive: true, force: true });
+        if (!fs.existsSync(fullPath)) {
+            continue;
+        }
+        for (const entry of fs.readdirSync(fullPath)) {
+            if (!entry.startsWith('TEST-') || !entry.endsWith('.xml')) {
+                continue;
+            }
+            try {
+                fs.unlinkSync(path.join(fullPath, entry));
+            } catch {
+                // File may be locked by a concurrent JVM — skip silently
+            }
         }
     }
 }
