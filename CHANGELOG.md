@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] — 2026-05-06
+
+### Fixed
+
+- `clearReportsBeforeRun` no longer throws `EBUSY` when a JVM process holds a lock on `.bin` files in `surefire-reports`. Only `TEST-*.xml` files are now deleted instead of removing the entire directory.
+
+---
+
 ## [1.0.0] — 2026-05-06
 
 ### Added
