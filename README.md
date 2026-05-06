@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.9-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -27,12 +27,13 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 - **Auto-discovery** — finds all Maven modules and JUnit 5 test classes in the workspace
 - **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
 - **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes)
-- **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer
+- **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported
 - **Aggregate stats** — each tree node shows `| ✓N | ✗N | = N | T` counts at a glance
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
-- **Copy Maven Command** — copies the exact `mvn -Dtest=...` command to clipboard for use in a terminal or AI agent
+- **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
+- **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 
 ---
 

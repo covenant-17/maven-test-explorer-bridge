@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.9] — 2026-05-06
+
+### Changed
+
+- Updated README: corrected version badge, expanded Features section with codicons and Copy QuickPick details.
+
+---
+
+## [0.1.8] — 2026-05-06
+
+### Changed
+
+- Test tree now uses native VS Code codicons instead of Unicode placeholder symbols: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages.
+
+---
+
 ## [0.1.7] — 2026-05-06
 
 ### Added
