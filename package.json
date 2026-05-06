@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "maven-test-explorer",
   "license": "MIT",
+  "icon": "icon-17-128.png",
   "engines": {
     "vscode": "^1.84.0"
   },
