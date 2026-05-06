@@ -56,6 +56,11 @@
         "category": "Maven Test Explorer"
       },
       {
+        "command": "mavenTestExplorer.copy",
+        "title": "Copy...",
+        "category": "Maven Test Explorer"
+      },
+      {
         "command": "mavenTestExplorer.copyItemMavenCommand",
         "title": "Copy Maven Command",
         "category": "Maven Test Explorer"
@@ -103,28 +108,8 @@
     "menus": {
       "testing/item/context": [
         {
-          "command": "mavenTestExplorer.copyItemMavenCommand",
+          "command": "mavenTestExplorer.copy",
           "group": "9_maven_copy@1"
-        },
-        {
-          "command": "mavenTestExplorer.copyPackageName",
-          "group": "9_maven_copy@2",
-          "when": "testId =~ /\\//i"
-        },
-        {
-          "command": "mavenTestExplorer.copyClassName",
-          "group": "9_maven_copy@3",
-          "when": "testId =~ /\\//i"
-        },
-        {
-          "command": "mavenTestExplorer.copyFullPath",
-          "group": "9_maven_copy@4",
-          "when": "testId =~ /\\//i"
-        },
-        {
-          "command": "mavenTestExplorer.copyMethodName",
-          "group": "9_maven_copy@5",
-          "when": "testId =~ /#/"
         }
       ],
       "view/title": [

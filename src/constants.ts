@@ -31,6 +31,7 @@ export const CMD_RUN_ALL_TESTS = 'mavenTestExplorer.runAllTests';
 export const CMD_RERUN_FAILED = 'mavenTestExplorer.rerunFailed';
 export const CMD_CLEAN_REPORTS = 'mavenTestExplorer.cleanReports';
 export const CMD_COPY_MAVEN_COMMAND = 'mavenTestExplorer.copyMavenCommand';
+export const CMD_COPY = 'mavenTestExplorer.copy';
 export const CMD_COPY_ITEM_MAVEN_COMMAND = 'mavenTestExplorer.copyItemMavenCommand';
 export const CMD_COPY_CLASS_NAME = 'mavenTestExplorer.copyClassName';
 export const CMD_COPY_METHOD_NAME = 'mavenTestExplorer.copyMethodName';

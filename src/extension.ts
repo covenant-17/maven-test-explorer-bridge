@@ -27,6 +27,7 @@ import {
     CMD_RERUN_FAILED,
     CMD_CLEAN_REPORTS,
     CMD_COPY_MAVEN_COMMAND,
+    CMD_COPY,
     CMD_COPY_ITEM_MAVEN_COMMAND,
     CMD_COPY_CLASS_NAME,
     CMD_COPY_METHOD_NAME,
@@ -427,96 +428,225 @@ function registerCommands(
             vscode.window.showInformationMessage(`Copied: ${command}`);
         }),
 
-        // Context menu: Copy Maven command for a specific test item
-        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, async (item: vscode.TestItem) => {
+        // Context menu: "Copy..." — opens QuickPick, receives selected items directly (bypasses submenu limitation)
+        vscode.commands.registerCommand(CMD_COPY, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
             if (!item) { return; }
+            const items: vscode.TestItem[] = [item, ...rest];
+            const hasMethods = items.some((i) => i.id.includes('#'));
+            const hasSlash = items.some((i) => i.id.includes('/'));
+            const hasClass = items.some((i) => i.id.split('/').length >= 3);
+            type CopyOption = vscode.QuickPickItem & { action: string };
+            const options: CopyOption[] = [
+                { label: '$(terminal) Copy Maven Command', action: 'maven' },
+                ...(hasSlash ? [{ label: '$(symbol-namespace) Copy Package Name', action: 'package' }] : []),
+                ...(hasClass ? [{ label: '$(symbol-class) Copy Class Name (FQCN)', action: 'class' }] : []),
+                ...(hasSlash ? [{ label: '$(symbol-reference) Copy Full Path', action: 'fullpath' }] : []),
+                ...(hasMethods ? [{ label: '$(symbol-method) Copy Method Name', action: 'method' }] : []),
+            ];
+            const picked = await vscode.window.showQuickPick(options, {
+                placeHolder: items.length > 1 ? `Copy — ${items.length} items selected` : `Copy — ${item.label}`,
+            }) as CopyOption | undefined;
+            if (!picked) { return; }
+
+            if (picked.action === 'maven') {
+                const settings = readSettings();
+                const moduleMap = new Map<string, { module: MavenModule; classNames: string[] }>();
+                for (const it of items) {
+                    const parts = it.id.split('/');
+                    const mod = currentModules.find((m) => m.artifactId === parts[0]);
+                    if (!mod) { continue; }
+                    if (!moduleMap.has(parts[0])) { moduleMap.set(parts[0], { module: mod, classNames: [] }); }
+                    const entry = moduleMap.get(parts[0])!;
+                    if (parts.length === 2) {
+                        treeBuilder.getFqcnsForPackage(parts[0], parts[1]).forEach((f) => entry.classNames.push(f.substring(f.lastIndexOf('.') + 1)));
+                    } else if (parts.length >= 3) {
+                        entry.classNames.push(parts[2]);
+                    }
+                }
+                const commands: string[] = [];
+                for (const { module: mod, classNames } of moduleMap.values()) {
+                    const effectiveSettings = { ...settings, mavenExecutable: resolveExecutable(settings, mod.moduleDir) };
+                    let args: string[];
+                    if (classNames.length === 0) {
+                        args = buildRunAllArgs(effectiveSettings);
+                    } else {
+                        const classMethodMap = new Map<string, string[]>();
+                        for (const seg of classNames) {
+                            if (seg.includes('#')) {
+                                const [cls, method] = seg.split('#', 2);
+                                if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
+                                classMethodMap.get(cls)!.push(method);
+                            } else {
+                                if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
+                            }
+                        }
+                        const testParam = Array.from(classMethodMap.entries())
+                            .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
+                            .join('+');
+                        args = buildRunClassArgs(effectiveSettings, testParam);
+                    }
+                    commands.push(args.join(' '));
+                }
+                const text = commands.join('\n');
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.showInformationMessage(commands.length > 1 ? `Copied ${commands.length} commands` : `Copied: ${text}`);
+
+            } else if (picked.action === 'package') {
+                const packages = [...new Set(items.map((it) => { const p = it.id.split('/'); return p.length >= 2 ? p[1] : p[0]; }))];
+                const text = packages.join('\n');
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.showInformationMessage(packages.length > 1 ? `Copied ${packages.length} package names` : `Copied: ${text}`);
+
+            } else if (picked.action === 'class') {
+                const fqcns = [...new Set(items.map((it) => {
+                    const p = it.id.split('/');
+                    if (p.length >= 3) { return p[1] ? `${p[1]}.${p[2].split('#')[0]}` : p[2].split('#')[0]; }
+                    if (p.length === 2) { return p[1]; }
+                    return null;
+                }).filter(Boolean) as string[])];
+                if (fqcns.length === 0) { return; }
+                const text = fqcns.join('\n');
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.showInformationMessage(fqcns.length > 1 ? `Copied ${fqcns.length} class names` : `Copied: ${text}`);
+
+            } else if (picked.action === 'fullpath') {
+                const paths = items.map((it) => {
+                    const p = it.id.split('/');
+                    if (p.length === 1) { return p[0]; }
+                    if (p.length === 2) { return p[1]; }
+                    return p[1] ? `${p[1]}.${p[2]}` : p[2];
+                });
+                const text = paths.join('\n');
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.showInformationMessage(paths.length > 1 ? `Copied ${paths.length} paths` : `Copied: ${text}`);
+
+            } else if (picked.action === 'method') {
+                const methods = [...new Set(items.map((it) => {
+                    const p = it.id.split('/');
+                    if (p.length < 3) { return null; }
+                    const h = p[2].indexOf('#');
+                    return h >= 0 ? p[2].substring(h + 1) : null;
+                }).filter(Boolean) as string[])];
+                if (methods.length === 0) { return; }
+                const text = methods.join('\n');
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.showInformationMessage(methods.length > 1 ? `Copied ${methods.length} method names` : `Copied: ${text}`);
+            }
+        }),
+
+        // Context menu: Copy Maven command for a specific test item (multi-select aware)
+        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
+            if (!item) { return; }
+            const items = selected && selected.length > 0 ? selected : [item];
             const settings = readSettings();
-            const parts = item.id.split('/');
-            const moduleArtifactId = parts[0];
-            const module = currentModules.find((m) => m.artifactId === moduleArtifactId);
-            const resolvedExecutable = module
-                ? resolveExecutable(settings, module.moduleDir)
-                : settings.mavenExecutable;
-            const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
-
-            let args: string[];
-            if (parts.length === 1) {
-                // Module level — run all
-                args = buildRunAllArgs(effectiveSettings);
-            } else if (parts.length === 2) {
-                // Package level — run all classes in package
-                const packageName = parts[1];
-                const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, packageName);
-                const classParam = fqcns.map((f) => f.substring(f.lastIndexOf('.') + 1)).join('+');
-                args = buildRunClassArgs(effectiveSettings, classParam || packageName);
-            } else {
-                // Class or method
-                const segment = parts[2]; // e.g. "AppTest" or "AppTest#myMethod"
-                args = buildRunClassArgs(effectiveSettings, segment);
+            // Group by module
+            const moduleMap = new Map<string, { module: MavenModule; classNames: string[] }>();
+            for (const it of items) {
+                const parts = it.id.split('/');
+                const moduleArtifactId = parts[0];
+                const mod = currentModules.find((m) => m.artifactId === moduleArtifactId);
+                if (!mod) { continue; }
+                if (!moduleMap.has(moduleArtifactId)) { moduleMap.set(moduleArtifactId, { module: mod, classNames: [] }); }
+                const entry = moduleMap.get(moduleArtifactId)!;
+                if (parts.length === 2) {
+                    const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, parts[1]);
+                    fqcns.forEach((f) => entry.classNames.push(f.substring(f.lastIndexOf('.') + 1)));
+                } else if (parts.length >= 3) {
+                    entry.classNames.push(parts[2]);
+                }
             }
-            const command = args.join(' ');
+            const commands: string[] = [];
+            for (const { module: mod, classNames } of moduleMap.values()) {
+                const resolvedExecutable = resolveExecutable(settings, mod.moduleDir);
+                const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
+                let args: string[];
+                if (classNames.length === 0) {
+                    args = buildRunAllArgs(effectiveSettings);
+                } else {
+                    // Group methods by class
+                    const classMethodMap = new Map<string, string[]>();
+                    for (const seg of classNames) {
+                        if (seg.includes('#')) {
+                            const [cls, method] = seg.split('#', 2);
+                            if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
+                            classMethodMap.get(cls)!.push(method);
+                        } else {
+                            if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
+                        }
+                    }
+                    const testParam = Array.from(classMethodMap.entries())
+                        .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
+                        .join('+');
+                    args = buildRunClassArgs(effectiveSettings, testParam);
+                }
+                commands.push(args.join(' '));
+            }
+            const command = commands.join('\n');
             await vscode.env.clipboard.writeText(command);
-            vscode.window.showInformationMessage(`Copied: ${command}`);
+            vscode.window.showInformationMessage(items.length > 1 ? `Copied ${items.length} commands` : `Copied: ${command}`);
         }),
 
-        // Context menu: Copy class name (FQCN)
-        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, async (item: vscode.TestItem) => {
+        // Context menu: Copy class name (FQCN) — multi-select aware
+        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
             if (!item) { return; }
-            const parts = item.id.split('/');
-            // parts: [moduleId, packageName, className#method?]
-            let fqcn: string | undefined;
-            if (parts.length >= 3) {
-                const pkg = parts[1];
-                const cls = parts[2].split('#')[0];
-                fqcn = pkg ? `${pkg}.${cls}` : cls;
-            } else if (parts.length === 2) {
-                fqcn = parts[1]; // package
-            }
-            if (!fqcn) { return; }
-            await vscode.env.clipboard.writeText(fqcn);
-            vscode.window.showInformationMessage(`Copied: ${fqcn}`);
+            const items = selected && selected.length > 0 ? selected : [item];
+            const fqcns = [...new Set(items.map((it) => {
+                const parts = it.id.split('/');
+                if (parts.length >= 3) {
+                    const pkg = parts[1]; const cls = parts[2].split('#')[0];
+                    return pkg ? `${pkg}.${cls}` : cls;
+                } else if (parts.length === 2) { return parts[1]; }
+                return null;
+            }).filter(Boolean) as string[])];
+            if (fqcns.length === 0) { return; }
+            const text = fqcns.join('\n');
+            await vscode.env.clipboard.writeText(text);
+            vscode.window.showInformationMessage(fqcns.length > 1 ? `Copied ${fqcns.length} class names` : `Copied: ${text}`);
         }),
 
-        // Context menu: Copy method name only
-        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, async (item: vscode.TestItem) => {
+        // Context menu: Copy method name only — multi-select aware
+        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
             if (!item) { return; }
-            const parts = item.id.split('/');
-            if (parts.length < 3) { return; }
-            const hashIdx = parts[2].indexOf('#');
-            if (hashIdx < 0) { return; }
-            const methodName = parts[2].substring(hashIdx + 1);
-            await vscode.env.clipboard.writeText(methodName);
-            vscode.window.showInformationMessage(`Copied: ${methodName}`);
+            const items = selected && selected.length > 0 ? selected : [item];
+            const methods = [...new Set(items.map((it) => {
+                const parts = it.id.split('/');
+                if (parts.length < 3) { return null; }
+                const hashIdx = parts[2].indexOf('#');
+                return hashIdx >= 0 ? parts[2].substring(hashIdx + 1) : null;
+            }).filter(Boolean) as string[])];
+            if (methods.length === 0) { return; }
+            const text = methods.join('\n');
+            await vscode.env.clipboard.writeText(text);
+            vscode.window.showInformationMessage(methods.length > 1 ? `Copied ${methods.length} method names` : `Copied: ${text}`);
         }),
 
-        // Context menu: Copy package name
-        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, async (item: vscode.TestItem) => {
+        // Context menu: Copy package name — multi-select aware
+        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
             if (!item) { return; }
-            const parts = item.id.split('/');
-            const packageName = parts.length >= 2 ? parts[1] : parts[0];
-            await vscode.env.clipboard.writeText(packageName);
-            vscode.window.showInformationMessage(`Copied: ${packageName}`);
+            const items = selected && selected.length > 0 ? selected : [item];
+            const packages = [...new Set(items.map((it) => {
+                const parts = it.id.split('/');
+                return parts.length >= 2 ? parts[1] : parts[0];
+            }))];
+            const text = packages.join('\n');
+            await vscode.env.clipboard.writeText(text);
+            vscode.window.showInformationMessage(packages.length > 1 ? `Copied ${packages.length} package names` : `Copied: ${text}`);
         }),
 
-        // Context menu: Copy full path — package.ClassName#methodName
-        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, async (item: vscode.TestItem) => {
+        // Context menu: Copy full path — multi-select aware
+        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
             if (!item) { return; }
-            const parts = item.id.split('/');
-            let fullPath: string;
-            if (parts.length === 1) {
-                // Module
-                fullPath = parts[0];
-            } else if (parts.length === 2) {
-                // Package
-                fullPath = parts[1];
-            } else {
-                // Class or method: parts[1]=package, parts[2]=ClassName or ClassName#method
-                const pkg = parts[1];
-                const classAndMethod = parts[2];
-                fullPath = pkg ? `${pkg}.${classAndMethod}` : classAndMethod;
-            }
-            await vscode.env.clipboard.writeText(fullPath);
-            vscode.window.showInformationMessage(`Copied: ${fullPath}`);
+            const items = selected && selected.length > 0 ? selected : [item];
+            const paths = items.map((it) => {
+                const parts = it.id.split('/');
+                if (parts.length === 1) { return parts[0]; }
+                if (parts.length === 2) { return parts[1]; }
+                const pkg = parts[1]; const classAndMethod = parts[2];
+                return pkg ? `${pkg}.${classAndMethod}` : classAndMethod;
+            });
+            const text = paths.join('\n');
+            await vscode.env.clipboard.writeText(text);
+            vscode.window.showInformationMessage(paths.length > 1 ? `Copied ${paths.length} paths` : `Copied: ${text}`);
         }),
 
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, async () => {
