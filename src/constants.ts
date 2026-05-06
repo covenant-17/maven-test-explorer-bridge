@@ -32,6 +32,7 @@ export const CMD_RERUN_FAILED = 'mavenTestExplorer.rerunFailed';
 export const CMD_CLEAN_REPORTS = 'mavenTestExplorer.cleanReports';
 export const CMD_COPY_MAVEN_COMMAND = 'mavenTestExplorer.copyMavenCommand';
 export const CMD_CLEAR_RESULTS = 'mavenTestExplorer.clearResults';
+export const CMD_CLEAR_RESULTS_AND_HISTORY = 'mavenTestExplorer.clearResultsAndHistory';
 export const CMD_SHOW_HISTORY = 'mavenTestExplorer.showHistory';
 
 // Glob patterns

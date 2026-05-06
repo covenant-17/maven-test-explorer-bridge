@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Bridges Maven/Surefire test results into the VS Code Testing sidebar.",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -62,17 +62,29 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "mavenTestExplorer.clearResultsAndHistory",
+        "title": "Maven: Clear Results & History",
+        "category": "Maven Test Explorer",
+        "icon": "$(trash)"
+      },
+      {
         "command": "mavenTestExplorer.showHistory",
         "title": "Maven: Show Run History",
         "category": "Maven Test Explorer",
         "icon": "$(history)"
       }
     ],
+    "submenus": [],
     "menus": {
       "view/title": [
         {
           "command": "mavenTestExplorer.clearResults",
           "group": "navigation",
+          "when": "view == workbench.view.testing"
+        },
+        {
+          "command": "mavenTestExplorer.clearResultsAndHistory",
+          "group": "overflow",
           "when": "view == workbench.view.testing"
         },
         {

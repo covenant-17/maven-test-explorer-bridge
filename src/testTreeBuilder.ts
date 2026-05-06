@@ -78,6 +78,21 @@ export class TestTreeBuilder {
             .filter((item) => item.id.startsWith(prefix));
     }
 
+    /** Returns all FQCNs (root classes only) belonging to a package. */
+    getFqcnsForPackage(artifactId: string, packageName: string): string[] {
+        const pkgKey = `${artifactId}/${packageName}`;
+        const pkgItem = this.packageItems.get(pkgKey);
+        if (!pkgItem) { return []; }
+        const fqcns: string[] = [];
+        pkgItem.children.forEach((classItem) => {
+            // Find FQCN by reverse-lookup in classItems
+            for (const [fqcn, item] of this.classItems) {
+                if (item === classItem) { fqcns.push(fqcn); break; }
+            }
+        });
+        return fqcns;
+    }
+
     /**
      * Returns an existing method TestItem or creates a new one dynamically under
      * the class item. Used for inherited and @TestFactory dynamic tests that are
@@ -175,9 +190,19 @@ export class TestTreeBuilder {
         const statsFormat = settings.statsFormat;
 
         // --- Step 1: direct stats per FQCN from suite results ---
+        // Cross-suite dedup: Surefire reports parent-class methods in nested-class
+        // XML files, so the same (className, methodName) can appear in multiple suite
+        // entries. We count all occurrences WITHIN a suite (needed for @TestFactory /
+        // @ParameterizedTest where the same methodName repeats), but skip any
+        // (className, methodName) that was already claimed by a previous suite.
         const directStats = new Map<string, AggStats>();
+        const claimedByPreviousSuite = new Set<string>();
         for (const suite of suiteResults) {
+            const claimedByThisSuite = new Set<string>();
             for (const tc of suite.testCases) {
+                const crossSuiteKey = `${tc.className}#${tc.methodName}`;
+                if (claimedByPreviousSuite.has(crossSuiteKey)) { continue; }
+                claimedByThisSuite.add(crossSuiteKey);
                 let s = directStats.get(tc.className);
                 if (!s) {
                     s = zeroStats();
@@ -187,6 +212,9 @@ export class TestTreeBuilder {
                 else if (tc.status === 'failed')  { s.failed++;  }
                 else if (tc.status === 'error')   { s.error++;   }
                 else if (tc.status === 'skipped') { s.skipped++; }
+            }
+            for (const key of claimedByThisSuite) {
+                claimedByPreviousSuite.add(key);
             }
         }
 

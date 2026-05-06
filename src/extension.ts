@@ -28,6 +28,7 @@ import {
     CMD_CLEAN_REPORTS,
     CMD_COPY_MAVEN_COMMAND,
     CMD_CLEAR_RESULTS,
+    CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_SHOW_HISTORY,
 } from './constants';
 import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
@@ -37,9 +38,65 @@ import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
 let lastFailedClassNames: string[] = [];
 // Current set of Maven modules — updated on every refresh
 let currentModules: MavenModule[] = [];
+let _diagChannel: vscode.OutputChannel | undefined;
+// Cache of the last known SuiteResult per class name — used to compute full
+// aggregates after partial runs without losing results from other classes.
+// Key: suiteName (FQCN), Value: SuiteResult with merged test cases.
+const resultCache = new Map<string, SuiteResult>();
+
+/**
+ * Updates the result cache with new SuiteResults.
+ * For full-module runs, first evicts all suites belonging to that module.
+ * For all runs, merges at method level — existing methods are updated in-place,
+ * new methods are added, and methods not in the new result are preserved.
+ * This ensures aggregate counts never grow beyond unique method count.
+ */
+function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs: ReadonlySet<string>): void {
+    const log = (msg: string) => _diagChannel?.appendLine(`[Cache] ${msg}`);
+    const totalBefore = Array.from(resultCache.values()).reduce((s, r) => s + r.testCases.length, 0);
+    log(`updateResultCache — before: ${resultCache.size} suites, ${totalBefore} methods; incoming: ${newResults.length} suites; fullRunDirs: [${Array.from(fullRunModuleDirs).join(', ')}]`);
+
+    // For full runs: evict all cached suites under those module dirs
+    if (fullRunModuleDirs.size > 0) {
+        for (const [suiteName, suite] of resultCache) {
+            for (const dir of fullRunModuleDirs) {
+                if (suite.xmlPath.startsWith(dir + path.sep) || suite.xmlPath.startsWith(dir + '/')) {
+                    log(`  evict ${suiteName}`);
+                    resultCache.delete(suiteName);
+                    break;
+                }
+            }
+        }
+    }
+    // Merge at method level: update existing methods, add new ones, preserve untouched
+    for (const suite of newResults) {
+        const existing = resultCache.get(suite.suiteName);
+        if (!existing) {
+            log(`  NEW suite "${suite.suiteName}" (${suite.testCases.length} methods)`);
+            resultCache.set(suite.suiteName, suite);
+        } else {
+            const methodMap = new Map(existing.testCases.map(tc => [tc.methodName, tc]));
+            const before = methodMap.size;
+            for (const tc of suite.testCases) {
+                if (!methodMap.has(tc.methodName)) {
+                    log(`  NEW method "${tc.methodName}" added to "${suite.suiteName}"`);
+                }
+                methodMap.set(tc.methodName, tc);
+            }
+            const after = methodMap.size;
+            if (after !== before) {
+                log(`  WARN suite "${suite.suiteName}" grew ${before} → ${after}`);
+            }
+            resultCache.set(suite.suiteName, { ...suite, testCases: Array.from(methodMap.values()) });
+        }
+    }
+    const totalAfter = Array.from(resultCache.values()).reduce((s, r) => s + r.testCases.length, 0);
+    log(`updateResultCache — after: ${resultCache.size} suites, ${totalAfter} methods`);
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    _diagChannel = outputChannel;
     context.subscriptions.push(outputChannel);
 
     outputChannel.appendLine('[Extension] Maven Test Explorer Bridge activating...');
@@ -57,7 +114,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
     }
 
-    await buildTree(controller, treeBuilder, currentModules, outputChannel);
+    await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
 
     // Auto-refresh when Java test files are added, removed, or renamed
     let refreshDebounce: NodeJS.Timeout | undefined;
@@ -72,7 +129,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         refreshDebounce = setTimeout(async () => {
             outputChannel.appendLine('[Extension] Test file change detected — refreshing tree...');
             currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
         }, currentSettings.autoRefreshDebounceMs);
     };
     const javaTestWatcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
@@ -86,7 +143,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (item === undefined) {
             // Full refresh requested
             currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
         }
     };
 
@@ -94,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     controller.refreshHandler = async (_token) => {
         outputChannel.appendLine('[Extension] Reloading test tree...');
         currentModules = await discoverModules(outputChannel);
-        await buildTree(controller, treeBuilder, currentModules, outputChannel);
+        await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
     };
 
     // Run profile — the only active profile for MVP
@@ -142,6 +199,8 @@ async function runHandler(
     // Determine which modules and classes are targeted
     const targetModules = resolveTargetModules(request, treeBuilder, modules);
     const allSuiteResults: SuiteResult[] = [];
+    // Modules where ALL tests were run — their cache entries must be replaced, not merged
+    const fullRunModuleDirs = new Set<string>();
 
     // Create the TestRun upfront so we can show enqueued/started states
     const run = controller.createTestRun(request, 'Maven Surefire Results', true);
@@ -188,6 +247,7 @@ async function runHandler(
 
             let args: string[];
             if (classNames.length === 0) {
+                fullRunModuleDirs.add(module.moduleDir);
                 args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
             } else if (classNames.length === 1 && classNames[0].includes('#')) {
                 const [className, methodName] = classNames[0].split('#');
@@ -246,7 +306,9 @@ async function runHandler(
             }
         }
     } finally {
-        treeBuilder.updateAggregates(allSuiteResults);
+        updateResultCache(allSuiteResults, fullRunModuleDirs);
+        await saveResultCache(context, resultCache, outputChannel);
+        treeBuilder.updateAggregates(Array.from(resultCache.values()));
         run.end();
         clearUiRunXmlPaths();
     }
@@ -270,7 +332,7 @@ function registerCommands(
         vscode.commands.registerCommand(CMD_REFRESH_TESTS, async () => {
             outputChannel.appendLine('[Command] Refreshing test tree...');
             currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
             vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
         }),
 
@@ -349,11 +411,23 @@ function registerCommands(
 
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, async () => {
             outputChannel.appendLine('[Command] Clearing test results...');
+            resultCache.clear();
+            await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
             currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel);
-            treeBuilder.resetAllResults();
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context, false);
             await vscode.commands.executeCommand('testing.clearTestResults');
             vscode.window.showInformationMessage('Maven Test Explorer: Results cleared.');
+        }),
+
+        vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, async () => {
+            outputChannel.appendLine('[Command] Clearing test results and history...');
+            resultCache.clear();
+            await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
+            clearHistory(context);
+            currentModules = await discoverModules(outputChannel);
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context, false);
+            await vscode.commands.executeCommand('testing.clearTestResults');
+            vscode.window.showInformationMessage('Maven Test Explorer: Results and history cleared.');
         }),
 
         vscode.commands.registerCommand(CMD_SHOW_HISTORY, async () => {
@@ -416,6 +490,8 @@ async function buildTree(
     treeBuilder: TestTreeBuilder,
     modules: readonly MavenModule[],
     outputChannel: vscode.OutputChannel,
+    context: vscode.ExtensionContext,
+    restoreResults = true,
 ): Promise<void> {
     const { testSourceGlobs } = readSettings();
     const modulesWithClasses: Array<{ module: MavenModule; classes: Awaited<ReturnType<typeof scanTestFiles>> }> = [];
@@ -429,6 +505,34 @@ async function buildTree(
     }
 
     treeBuilder.buildTree(modulesWithClasses);
+
+    if (!restoreResults) {
+        return;
+    }
+
+    // Restore aggregation: prefer persisted cache, fall back to XML files on disk
+    resultCache.clear();
+    const persisted = loadResultCache(context, outputChannel);
+    if (persisted.size > 0) {
+        for (const [k, v] of persisted) { resultCache.set(k, v); }
+        outputChannel.appendLine(`[Extension] Restored ${resultCache.size} cached result(s) from workspace state`);
+    } else {
+        // First launch or after cache was cleared — read from disk
+        const settings = readSettings();
+        for (const module of modules) {
+            const existing = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
+            updateResultCache(existing, new Set());
+        }
+    }
+
+    // Replay cached results into a persistent TestRun to restore icons
+    if (resultCache.size > 0) {
+        const restoreRun = controller.createTestRun(new vscode.TestRunRequest(), 'Restored Results', true);
+        publishResults(undefined, treeBuilder, Array.from(resultCache.values()), outputChannel, undefined, false, restoreRun);
+        restoreRun.end();
+    }
+
+    treeBuilder.updateAggregates(Array.from(resultCache.values()));
 }
 
 /**
@@ -582,12 +686,20 @@ function resolveTargetModules(
 
         const entry = moduleMap.get(moduleArtifactId)!;
 
-        // Extract class or method target from the item ID
-        if (parts.length >= 3) {
+        if (parts.length === 2) {
+            // Package selected — collect all root classes in that package
+            const packageName = parts[1];
+            const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, packageName);
+            for (const fqcn of fqcns) {
+                const simpleName = fqcn.substring(fqcn.lastIndexOf('.') + 1);
+                entry.classNames.push(simpleName);
+            }
+        } else if (parts.length >= 3) {
+            // Class or method selected
             const classSegment = parts[2]; // e.g. "CreateChannelsAdTest" or "CreateChannelsAdTest#method"
             entry.classNames.push(classSegment);
         }
-        // If only module or package is selected, run the whole module
+        // If only module is selected (parts.length === 1), run the whole module
     }
 
     return Array.from(moduleMap.values());
@@ -603,4 +715,24 @@ function collectFailedClasses(suiteResults: readonly SuiteResult[]): string[] {
         }
     }
     return Array.from(failed);
+}
+
+// -------------------------------------------------------------------------
+// Result cache persistence (workspaceState)
+// -------------------------------------------------------------------------
+
+const RESULT_CACHE_KEY = 'mavenTestExplorer.resultCache';
+
+async function saveResultCache(context: vscode.ExtensionContext, cache: Map<string, SuiteResult>, outputChannel: vscode.OutputChannel): Promise<void> {
+    const plain: Record<string, SuiteResult> = {};
+    for (const [k, v] of cache) { plain[k] = v; }
+    await context.workspaceState.update(RESULT_CACHE_KEY, plain);
+    outputChannel.appendLine(`[Cache] Saved ${cache.size} result(s) to workspaceState`);
+}
+
+function loadResultCache(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Map<string, SuiteResult> {
+    const plain = context.workspaceState.get<Record<string, SuiteResult>>(RESULT_CACHE_KEY);
+    outputChannel.appendLine(`[Cache] Load attempt — raw value type: ${typeof plain}, keys: ${plain ? Object.keys(plain).length : 'null'}`);
+    if (!plain) { return new Map(); }
+    return new Map(Object.entries(plain));
 }

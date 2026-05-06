@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.5] — 2026-05-06
+
+### Fixed
+
+- Clicking a package node (e.g. `com.example.edge`) now runs only the tests in that package instead of the entire module.
+
+---
+
+## [0.1.4] — 2026-05-06
+
+### Fixed
+
+- Aggregate counts no longer grow when running the same test multiple times in a "sandwich" pattern (single → all → single). Cross-suite deduplication now correctly handles Surefire's behavior of reporting parent-class methods inside nested-class XML files, while preserving all invocations of `@TestFactory` and `@ParameterizedTest` methods within a single suite.
+
+---
+
+## [0.1.3] — 2026-05-06
+
+### Fixed
+
+- Aggregate stats now correctly restore after VS Code reload. Results are persisted to `workspaceState` after every run and restored on startup, so reloading the window no longer loses stats from previous runs.
+- Running a single test no longer clears stats for other test classes in the tree.
+
+---
+
+## [0.1.2] — 2026-05-06
+
+### Fixed
+
+- Aggregate stats (✓/✗/⊘) now appear on startup when existing Surefire XML reports are already present on disk.
+- Running a single test class or method no longer resets aggregate stats for the rest of the tree. Results from previous runs are preserved via an in-memory cache and merged with the new results before recomputing aggregates.
+
+---
+
 ## [0.1.1] — 2026-05-06
 
 ### Fixed
