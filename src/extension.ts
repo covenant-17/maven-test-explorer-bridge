@@ -249,11 +249,24 @@ async function runHandler(
             if (classNames.length === 0) {
                 fullRunModuleDirs.add(module.moduleDir);
                 args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
-            } else if (classNames.length === 1 && classNames[0].includes('#')) {
-                const [className, methodName] = classNames[0].split('#');
-                args = buildRunMethodArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, className, methodName);
             } else {
-                args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, classNames.join('+'));
+                // Group method-level targets by class: "ClassName#method1+method2"
+                // Plain class names (no #) are passed as-is.
+                const classMethodMap = new Map<string, string[]>();
+                for (const segment of classNames) {
+                    if (segment.includes('#')) {
+                        const [cls, method] = segment.split('#', 2);
+                        if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
+                        classMethodMap.get(cls)!.push(method);
+                    } else {
+                        // Class-level target — no method filter
+                        if (!classMethodMap.has(segment)) { classMethodMap.set(segment, []); }
+                    }
+                }
+                const testParam = Array.from(classMethodMap.entries())
+                    .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
+                    .join('+');
+                args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, testParam);
             }
 
             // Start watching report dirs — publishes results in real time as XMLs appear
