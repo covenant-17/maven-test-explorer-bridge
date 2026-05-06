@@ -111,7 +111,7 @@ export class TestTreeBuilder {
             return undefined;
         }
         const methodId = `${classItem.id}#${methodName}`;
-        const methodItem = this.controller.createTestItem(methodId, `⬧ ${methodName}()`, classItem.uri);
+        const methodItem = this.controller.createTestItem(methodId, `$(symbol-method) ${methodName}()`, classItem.uri);
         this.methodItems.set(`${fqcn}#${methodName}`, methodItem);
         // Append to class children
         const children: vscode.TestItem[] = [];
@@ -153,7 +153,7 @@ export class TestTreeBuilder {
         const classId = `${moduleId}/${packageName}/${classRelative}`;
         const simpleName = fqcn.includes('$') ? fqcn.split('$').pop()! : baseFqcn.substring(dotIdx + 1);
 
-        const classItem = this.controller.createTestItem(classId, `⬡ ${simpleName}`);
+        const classItem = this.controller.createTestItem(classId, `$(symbol-class) ${simpleName}`);
         this.classItems.set(fqcn, classItem);
 
         // Append to package children
@@ -285,7 +285,7 @@ export class TestTreeBuilder {
         classes: readonly TestClassInfo[],
     ): vscode.TestItem {
         const pkgId = `${moduleId}/${packageName}`;
-        const pkgItem = this.controller.createTestItem(pkgId, packageName ? `{ } ${packageName}` : '(default package)');
+        const pkgItem = this.controller.createTestItem(pkgId, packageName ? `$(symbol-namespace) ${packageName}` : '(default package)');
         this.packageItems.set(pkgId, pkgItem);
 
         // --- Pass 1: create a TestItem for every class (root and nested) ---
@@ -301,7 +301,7 @@ export class TestTreeBuilder {
 
             const classItem = this.controller.createTestItem(
                 classId,
-                cls.displayName ? `⬡ ${cls.displayName}` : `⬡ ${simpleName}`,
+                cls.displayName ? `$(symbol-class) ${cls.displayName}` : `$(symbol-class) ${simpleName}`,
                 classUri,
             );
 
@@ -361,7 +361,7 @@ export class TestTreeBuilder {
         const methodId = `${classId}#${method.name}`;
         const methodItem = this.controller.createTestItem(
             methodId,
-            method.displayName ? `⬧ ${method.displayName}` : `⬧ ${method.name}()`,
+            method.displayName ? `$(symbol-method) ${method.displayName}` : `$(symbol-method) ${method.name}()`,
             classUri,
         );
         const zeroBasedLine = Math.max(0, method.line - 1);
