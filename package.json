@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Bridges Maven/Surefire test results into the VS Code Testing sidebar.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -56,6 +56,31 @@
         "category": "Maven Test Explorer"
       },
       {
+        "command": "mavenTestExplorer.copyItemMavenCommand",
+        "title": "Copy Maven Command",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.copyClassName",
+        "title": "Copy Class Name (FQCN)",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.copyMethodName",
+        "title": "Copy Method Name",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.copyPackageName",
+        "title": "Copy Package Name",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.copyFullPath",
+        "title": "Copy Full Path",
+        "category": "Maven Test Explorer"
+      },
+      {
         "command": "mavenTestExplorer.clearResults",
         "title": "Maven: Clear Test Results",
         "category": "Maven Test Explorer",
@@ -76,6 +101,32 @@
     ],
     "submenus": [],
     "menus": {
+      "testing/item/context": [
+        {
+          "command": "mavenTestExplorer.copyItemMavenCommand",
+          "group": "9_maven_copy@1"
+        },
+        {
+          "command": "mavenTestExplorer.copyPackageName",
+          "group": "9_maven_copy@2",
+          "when": "testId =~ /\\//i"
+        },
+        {
+          "command": "mavenTestExplorer.copyClassName",
+          "group": "9_maven_copy@3",
+          "when": "testId =~ /\\//i"
+        },
+        {
+          "command": "mavenTestExplorer.copyFullPath",
+          "group": "9_maven_copy@4",
+          "when": "testId =~ /\\//i"
+        },
+        {
+          "command": "mavenTestExplorer.copyMethodName",
+          "group": "9_maven_copy@5",
+          "when": "testId =~ /#/"
+        }
+      ],
       "view/title": [
         {
           "command": "mavenTestExplorer.clearResults",

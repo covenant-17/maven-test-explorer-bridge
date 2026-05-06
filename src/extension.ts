@@ -27,6 +27,11 @@ import {
     CMD_RERUN_FAILED,
     CMD_CLEAN_REPORTS,
     CMD_COPY_MAVEN_COMMAND,
+    CMD_COPY_ITEM_MAVEN_COMMAND,
+    CMD_COPY_CLASS_NAME,
+    CMD_COPY_METHOD_NAME,
+    CMD_COPY_PACKAGE_NAME,
+    CMD_COPY_FULL_PATH,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_SHOW_HISTORY,
@@ -420,6 +425,98 @@ function registerCommands(
             const command = args.join(' ');
             await vscode.env.clipboard.writeText(command);
             vscode.window.showInformationMessage(`Copied: ${command}`);
+        }),
+
+        // Context menu: Copy Maven command for a specific test item
+        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, async (item: vscode.TestItem) => {
+            if (!item) { return; }
+            const settings = readSettings();
+            const parts = item.id.split('/');
+            const moduleArtifactId = parts[0];
+            const module = currentModules.find((m) => m.artifactId === moduleArtifactId);
+            const resolvedExecutable = module
+                ? resolveExecutable(settings, module.moduleDir)
+                : settings.mavenExecutable;
+            const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
+
+            let args: string[];
+            if (parts.length === 1) {
+                // Module level — run all
+                args = buildRunAllArgs(effectiveSettings);
+            } else if (parts.length === 2) {
+                // Package level — run all classes in package
+                const packageName = parts[1];
+                const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, packageName);
+                const classParam = fqcns.map((f) => f.substring(f.lastIndexOf('.') + 1)).join('+');
+                args = buildRunClassArgs(effectiveSettings, classParam || packageName);
+            } else {
+                // Class or method
+                const segment = parts[2]; // e.g. "AppTest" or "AppTest#myMethod"
+                args = buildRunClassArgs(effectiveSettings, segment);
+            }
+            const command = args.join(' ');
+            await vscode.env.clipboard.writeText(command);
+            vscode.window.showInformationMessage(`Copied: ${command}`);
+        }),
+
+        // Context menu: Copy class name (FQCN)
+        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, async (item: vscode.TestItem) => {
+            if (!item) { return; }
+            const parts = item.id.split('/');
+            // parts: [moduleId, packageName, className#method?]
+            let fqcn: string | undefined;
+            if (parts.length >= 3) {
+                const pkg = parts[1];
+                const cls = parts[2].split('#')[0];
+                fqcn = pkg ? `${pkg}.${cls}` : cls;
+            } else if (parts.length === 2) {
+                fqcn = parts[1]; // package
+            }
+            if (!fqcn) { return; }
+            await vscode.env.clipboard.writeText(fqcn);
+            vscode.window.showInformationMessage(`Copied: ${fqcn}`);
+        }),
+
+        // Context menu: Copy method name only
+        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, async (item: vscode.TestItem) => {
+            if (!item) { return; }
+            const parts = item.id.split('/');
+            if (parts.length < 3) { return; }
+            const hashIdx = parts[2].indexOf('#');
+            if (hashIdx < 0) { return; }
+            const methodName = parts[2].substring(hashIdx + 1);
+            await vscode.env.clipboard.writeText(methodName);
+            vscode.window.showInformationMessage(`Copied: ${methodName}`);
+        }),
+
+        // Context menu: Copy package name
+        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, async (item: vscode.TestItem) => {
+            if (!item) { return; }
+            const parts = item.id.split('/');
+            const packageName = parts.length >= 2 ? parts[1] : parts[0];
+            await vscode.env.clipboard.writeText(packageName);
+            vscode.window.showInformationMessage(`Copied: ${packageName}`);
+        }),
+
+        // Context menu: Copy full path — package.ClassName#methodName
+        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, async (item: vscode.TestItem) => {
+            if (!item) { return; }
+            const parts = item.id.split('/');
+            let fullPath: string;
+            if (parts.length === 1) {
+                // Module
+                fullPath = parts[0];
+            } else if (parts.length === 2) {
+                // Package
+                fullPath = parts[1];
+            } else {
+                // Class or method: parts[1]=package, parts[2]=ClassName or ClassName#method
+                const pkg = parts[1];
+                const classAndMethod = parts[2];
+                fullPath = pkg ? `${pkg}.${classAndMethod}` : classAndMethod;
+            }
+            await vscode.env.clipboard.writeText(fullPath);
+            vscode.window.showInformationMessage(`Copied: ${fullPath}`);
         }),
 
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, async () => {

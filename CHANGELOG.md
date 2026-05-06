@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.6] — 2026-05-06
+
+### Fixed
+
+- Selecting multiple methods (Shift+Click) across one or several classes now correctly runs all of them. Previously only the first method ran; now they are grouped per class and passed as `-Dtest=ClassName#method1+method2+...`.
+
+---
+
 ## [0.1.5] — 2026-05-06
 
 ### Fixed
