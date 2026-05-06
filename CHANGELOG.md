@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.7] — 2026-05-06
+
+### Added
+
+- **Copy... (multi-select aware)** — right-click any test item to open a "Copy..." menu with 5 options: Maven Command, Package Name, Class Name (FQCN), Full Path, Method Name.
+- Multi-selection works: Ctrl+Click several tests, then Copy... — all selected items are processed and joined with newlines.
+- "Copy Maven Command" on multi-select groups methods by class and builds a single `-Dtest=Class1#m1+m2+Class2#m3` argument across all selected items.
+
+> **Technical note:** VS Code only passes multi-select arguments to commands registered directly in `testing/item/context`. Submenu commands receive only one item — a VS Code architectural limitation confirmed in the source code. The solution uses a single direct command that opens a QuickPick instead of a submenu.
+
+---
+
 ## [0.1.6] — 2026-05-06
 
 ### Fixed
