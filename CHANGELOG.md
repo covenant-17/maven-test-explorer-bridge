@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0] — 2026-05-07
+
+### Added
+
+- **Attach Class/Method to AI Chat** — right-click a class or method in the Test Explorer to attach its source code to the active AI chat (GitHub Copilot, Anthropic Claude Code, OpenAI ChatGPT/Codex). The source file opens in a preview tab, the relevant range is selected, all installed AI assistants receive the selection, then the tab closes automatically.
+- Context menu entries are filtered: "Attach Class to AI Chat" appears only on class items, "Attach Method to AI Chat" only on method items — packages and modules are excluded.
+- Multi-select supported: selecting multiple tests attaches each one sequentially.
+
+---
+
 ## [0.1.9] — 2026-05-06
 
 ### Changed
