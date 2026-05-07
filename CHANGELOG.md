@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] — 2026-05-07
+
+### Changed
+
+- Split AI chat attachment into two separate context menu actions: **Attach to Copilot Chat** (uses `github.copilot.chat.attachSelection`) and **Attach to Claude** (uses `claude-vscode.insertAtMention` + copies `file.java#startLine-endLine` path to clipboard as fallback).
+- Extracted shared `openItemInEditor` helper — resolves class symbol range via `DocumentSymbolProvider` for class items that don't have a range set.
+
+---
+
 ## [0.2.0] — 2026-05-07
 
 ### Added
