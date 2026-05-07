@@ -121,17 +121,18 @@
       "testing/item/context": [
         {
           "command": "mavenTestExplorer.copy",
-          "group": "9_maven_copy@1"
+          "group": "9_maven_copy@1",
+          "when": "controllerId == 'mavenTestExplorer'"
         },
         {
           "command": "mavenTestExplorer.attachClassToChat",
           "group": "9_maven_copy@2",
-          "when": "testItem.tags contains 'mavenTestExplorer.class'"
+          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri && !(testId =~ /#/)"
         },
         {
           "command": "mavenTestExplorer.attachMethodToChat",
           "group": "9_maven_copy@2",
-          "when": "testItem.tags contains 'mavenTestExplorer.method'"
+          "when": "controllerId == 'mavenTestExplorer' && testId =~ /#/"
         }
       ],
       "view/title": [
