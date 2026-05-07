@@ -40,8 +40,8 @@ export const CMD_COPY_FULL_PATH = 'mavenTestExplorer.copyFullPath';
 export const CMD_CLEAR_RESULTS = 'mavenTestExplorer.clearResults';
 export const CMD_CLEAR_RESULTS_AND_HISTORY = 'mavenTestExplorer.clearResultsAndHistory';
 export const CMD_SHOW_HISTORY = 'mavenTestExplorer.showHistory';
-export const CMD_ATTACH_CLASS_TO_CHAT = 'mavenTestExplorer.attachClassToChat';
-export const CMD_ATTACH_METHOD_TO_CHAT = 'mavenTestExplorer.attachMethodToChat';
+export const CMD_ATTACH_TO_COPILOT = 'mavenTestExplorer.attachToCopilot';
+export const CMD_ATTACH_TO_CLAUDE = 'mavenTestExplorer.attachToClaude';
 
 // Glob patterns
 export const POM_GLOB = '**/pom.xml';

@@ -104,14 +104,14 @@
         "icon": "$(history)"
       },
       {
-        "command": "mavenTestExplorer.attachClassToChat",
-        "title": "Attach Class to AI Chat",
+        "command": "mavenTestExplorer.attachToCopilot",
+        "title": "Attach to Copilot Chat",
         "category": "Maven Test Explorer",
-        "icon": "$(comment-discussion)"
+        "icon": "$(copilot)"
       },
       {
-        "command": "mavenTestExplorer.attachMethodToChat",
-        "title": "Attach Method to AI Chat",
+        "command": "mavenTestExplorer.attachToClaude",
+        "title": "Attach to Claude",
         "category": "Maven Test Explorer",
         "icon": "$(comment-discussion)"
       }
@@ -125,14 +125,14 @@
           "when": "controllerId == 'mavenTestExplorer'"
         },
         {
-          "command": "mavenTestExplorer.attachClassToChat",
+          "command": "mavenTestExplorer.attachToCopilot",
           "group": "9_maven_copy@2",
-          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri && !(testId =~ /#/)"
+          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri"
         },
         {
-          "command": "mavenTestExplorer.attachMethodToChat",
-          "group": "9_maven_copy@2",
-          "when": "controllerId == 'mavenTestExplorer' && testId =~ /#/"
+          "command": "mavenTestExplorer.attachToClaude",
+          "group": "9_maven_copy@3",
+          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri"
         }
       ],
       "view/title": [

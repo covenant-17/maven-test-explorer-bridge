@@ -36,8 +36,8 @@ import {
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_SHOW_HISTORY,
-    CMD_ATTACH_CLASS_TO_CHAT,
-    CMD_ATTACH_METHOD_TO_CHAT,
+    CMD_ATTACH_TO_COPILOT,
+    CMD_ATTACH_TO_CLAUDE,
 } from './constants';
 import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
 import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
@@ -342,6 +342,37 @@ async function runHandler(
 // -------------------------------------------------------------------------
 // Commands
 // -------------------------------------------------------------------------
+
+/** Opens a TestItem's source file in a preview editor and resolves its line range.
+ *  For method items the range comes directly from item.range.
+ *  For class items (no range set) the range is looked up via DocumentSymbolProvider. */
+async function openItemInEditor(item: vscode.TestItem): Promise<{ editor: vscode.TextEditor; range: vscode.Range | undefined }> {
+    const editor = await vscode.window.showTextDocument(item.uri!, {
+        selection: item.range,
+        preserveFocus: false,
+        preview: true,
+    });
+    let range = item.range;
+    if (!range) {
+        const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+            'vscode.executeDocumentSymbolProvider', item.uri!,
+        );
+        if (symbols) {
+            const parts = item.id.split('/');
+            const simpleName = parts[parts.length - 1].split('$').pop() ?? '';
+            const find = (list: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+                for (const s of list) {
+                    if (s.kind === vscode.SymbolKind.Class && s.name === simpleName) { return s; }
+                    const found = find(s.children);
+                    if (found) { return found; }
+                }
+                return undefined;
+            };
+            range = find(symbols)?.range;
+        }
+    }
+    return { editor, range };
+}
 
 function registerCommands(
     context: vscode.ExtensionContext,
@@ -708,57 +739,44 @@ function registerCommands(
             }
         }),
 
-        // Context menu: "Attach Class/Method to Copilot" — opens source with selection, attaches to chat, closes preview
-        ...([CMD_ATTACH_CLASS_TO_CHAT, CMD_ATTACH_METHOD_TO_CHAT] as const).map((cmdId) =>
-            vscode.commands.registerCommand(cmdId, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
-                if (!item?.uri) { return; }
-                const items = [item, ...rest].filter((i) => i?.uri);
-                for (const it of items) {
-                    const editor = await vscode.window.showTextDocument(it.uri!, {
-                        selection: it.range,
-                        preserveFocus: false,
-                        preview: true,
-                    });
-                    let selectionRange = it.range;
-                    // For class items (no range), find the class symbol range via document symbols
-                    if (!selectionRange) {
-                        const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-                            'vscode.executeDocumentSymbolProvider', it.uri!,
-                        );
-                        if (symbols) {
-                            // item id: moduleId/package/ClassName — extract simple class name
-                            const parts = it.id.split('/');
-                            const simpleName = parts[parts.length - 1].split('$').pop() ?? '';
-                            const findSymbol = (list: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
-                                for (const s of list) {
-                                    if (s.kind === vscode.SymbolKind.Class && s.name === simpleName) { return s; }
-                                    const found = findSymbol(s.children);
-                                    if (found) { return found; }
-                                }
-                                return undefined;
-                            };
-                            const sym = findSymbol(symbols);
-                            if (sym) { selectionRange = sym.range; }
-                        }
-                    }
-                    if (selectionRange) {
-                        editor.selection = new vscode.Selection(selectionRange.start, selectionRange.end);
-                        editor.revealRange(selectionRange, vscode.TextEditorRevealType.InCenter);
-                    }
-                    // Try all known AI assistant "attach selection" commands — ignore if not installed
-                    const aiAttachCommands = [
-                        'github.copilot.chat.attachSelection', // GitHub Copilot
-                        'chatgpt.addToThread',                 // OpenAI ChatGPT / Codex
-                        'claude-vscode.insertAtMention',       // Anthropic Claude Code
-                    ];
-                    for (const cmd of aiAttachCommands) {
-                        try { await vscode.commands.executeCommand(cmd); } catch { /* extension not active */ }
-                    }
-                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        // Context menu: "Attach to Copilot Chat" — opens source, selects range, attaches, closes preview
+        vscode.commands.registerCommand(CMD_ATTACH_TO_COPILOT, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
+            if (!item?.uri) { return; }
+            for (const it of [item, ...rest].filter((i) => i?.uri)) {
+                const { editor, range } = await openItemInEditor(it);
+                if (range) {
+                    editor.selection = new vscode.Selection(range.start, range.end);
+                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
                 }
-                await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus');
-            }),
-        ),
+                try { await vscode.commands.executeCommand('github.copilot.chat.attachSelection'); } catch { /* not installed */ }
+                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+            }
+            try { await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus'); } catch { /* not installed */ }
+        }),
+
+        // Context menu: "Attach to Claude" — builds file#startLine-endLine path, opens Claude, inserts reference
+        vscode.commands.registerCommand(CMD_ATTACH_TO_CLAUDE, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
+            if (!item?.uri) { return; }
+            for (const it of [item, ...rest].filter((i) => i?.uri)) {
+                const { editor, range } = await openItemInEditor(it);
+                if (range) {
+                    editor.selection = new vscode.Selection(range.start, range.end);
+                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+                }
+                // Try Claude's insertAtMention with active selection
+                try { await vscode.commands.executeCommand('claude-vscode.insertAtMention'); } catch { /* not installed */ }
+                // Also build path string for manual paste fallback
+                if (range) {
+                    const startLine = range.start.line + 1;
+                    const endLine = range.end.line + 1;
+                    const lineFragment = startLine === endLine ? `#${startLine}` : `#${startLine}-${endLine}`;
+                    const pathStr = it.uri!.fsPath + lineFragment;
+                    await vscode.env.clipboard.writeText(pathStr);
+                }
+                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+            }
+            try { await vscode.commands.executeCommand('claude-vscode.focus'); } catch { /* not installed */ }
+        }),
     );
 }
 
