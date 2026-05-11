@@ -16,11 +16,16 @@ export interface MavenRunResult {
  *
  * Uses shell: true so that 'mvn' resolves to 'mvn.cmd' on Windows without extra configuration.
  */
+// Surefire per-class summary line, e.g.:
+//   Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 30.5 s -- in tests.MyTest
+const SUREFIRE_CLASS_SUMMARY = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)/;
+
 export function runMaven(
     cwd: string,
     args: readonly string[],
     outputChannel: vscode.OutputChannel,
     token: vscode.CancellationToken,
+    totalExpected?: number,
 ): Promise<MavenRunResult> {
     return new Promise((resolve) => {
         const executable = args[0];
@@ -37,16 +42,45 @@ export function runMaven(
             env: process.env,
         });
 
+        let runningPassed = 0;
+        let runningFailed = 0;
+        let runningErrors = 0;
+        let runningSkipped = 0;
+        let stdoutBuf = '';
+
         proc.stdout.on('data', (chunk: Buffer) => {
-            outputChannel.append(chunk.toString());
-            // TODO: Parse Surefire stdout lines in real time to mark failing methods immediately,
-            // without waiting for the XML report. Surefire prints failure lines as soon as each
-            // method finishes, e.g.:
-            //   [ERROR] com.example.AppTest.myTest -- Time elapsed: 0.003 s <<< FAILURE!
-            //   [ERROR] com.example.AppTest.myTest -- Time elapsed: 0.001 s <<< ERROR!
-            // Passing methods produce no per-method output — they can only be resolved from the
-            // XML at class completion. A streaming line parser here could call run.failed() /
-            // run.errored() immediately for the bad cases, giving faster feedback in the sidebar.
+            const text = chunk.toString();
+            outputChannel.append(text);
+
+            stdoutBuf += text;
+            let newlineIdx: number;
+            while ((newlineIdx = stdoutBuf.indexOf('\n')) !== -1) {
+                const line = stdoutBuf.slice(0, newlineIdx);
+                stdoutBuf = stdoutBuf.slice(newlineIdx + 1);
+
+                const m = SUREFIRE_CLASS_SUMMARY.exec(line);
+                if (m) {
+                    const classTotal    = parseInt(m[1], 10);
+                    const classFailed   = parseInt(m[2], 10);
+                    const classErrors   = parseInt(m[3], 10);
+                    const classSkipped  = parseInt(m[4], 10);
+                    const classPassed   = classTotal - classFailed - classErrors - classSkipped;
+                    runningPassed  += classPassed;
+                    runningFailed  += classFailed + classErrors;
+                    runningSkipped += classSkipped;
+                    const done = runningPassed + runningFailed + runningSkipped;
+                    const remaining = totalExpected !== undefined ? totalExpected - done : undefined;
+                    const parts = [
+                        `✓ ${runningPassed} passed`,
+                        `✗ ${runningFailed} failed`,
+                        `⊘ ${runningSkipped} skipped`,
+                    ];
+                    if (remaining !== undefined) {
+                        parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
+                    }
+                    outputChannel.appendLine(`[Progress] ${parts.join('  ')}`);
+                }
+            }
         });
 
         proc.stderr.on('data', (chunk: Buffer) => {

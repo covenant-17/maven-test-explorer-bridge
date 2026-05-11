@@ -282,7 +282,7 @@ async function runHandler(
                 module.moduleDir, settings.reportGlobs, run, treeBuilder, outputChannel,
             );
 
-            const result = await runMaven(module.moduleDir, args, outputChannel, token);
+            const result = await runMaven(module.moduleDir, args, outputChannel, token, moduleLeaves.length);
 
             // Stop the watcher; any in-flight 150ms parse timers become irrelevant — we
             // republish everything below from readAllReports as the single source of truth.
