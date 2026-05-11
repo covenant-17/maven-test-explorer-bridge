@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] — 2026-05-11
+
+### Added
+
+- **Running progress summary** — after each test class completes, the output channel now prints a live counter line:
+  `[Progress] ✓ 12 passed  ✗ 1 failed  ⊘ 0 skipped  ⏳ 8 remaining`
+  Counts accumulate across all classes in the run; `remaining` is computed from the total number of enqueued test items.
+
+---
+
 ## [0.2.1] — 2026-05-07
 
 ### Changed
