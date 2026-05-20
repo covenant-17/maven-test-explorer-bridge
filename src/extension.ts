@@ -273,7 +273,7 @@ async function runHandler(
                 }
                 const testParam = Array.from(classMethodMap.entries())
                     .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                    .join('+');
+                    .join(',');
                 args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, testParam);
             }
 
@@ -515,7 +515,7 @@ function registerCommands(
                         }
                         const testParam = Array.from(classMethodMap.entries())
                             .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                            .join('+');
+                            .join(',');
                         args = buildRunClassArgs(effectiveSettings, testParam);
                     }
                     commands.push(args.join(' '));
@@ -609,7 +609,7 @@ function registerCommands(
                     }
                     const testParam = Array.from(classMethodMap.entries())
                         .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                        .join('+');
+                        .join(',');
                     args = buildRunClassArgs(effectiveSettings, testParam);
                 }
                 commands.push(args.join(' '));

@@ -146,7 +146,7 @@ export function buildRerunFailedArgs(settings: ExtensionSettings, classNames: re
     if (classNames.length === 0) {
         return buildRunAllArgs(settings);
     }
-    const testParam = classNames.join('+');
+    const testParam = classNames.join(',');
     return buildRunClassArgs(settings, testParam);
 }
 

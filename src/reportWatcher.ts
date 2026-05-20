@@ -45,9 +45,29 @@ export function startReportWatcher(
 
     const pendingUris = new Set<string>();
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    let activeExternalRun: vscode.TestRun | undefined;
 
     function scheduleFlush(uri: vscode.Uri): void {
+        // Fast path: skip XMLs already claimed by a UI-triggered run
+        if (_processedByUiRun.has(uri.fsPath)) {
+            return;
+        }
+
+        const isFirstInBatch = pendingUris.size === 0;
         pendingUris.add(uri.fsPath);
+
+        // On the first XML of a new external batch: open a TestRun and show spinners
+        // for all known method items so the sidebar reflects an in-progress state.
+        if (isFirstInBatch && activeExternalRun === undefined) {
+            activeExternalRun = controller.createTestRun(
+                new vscode.TestRunRequest(),
+                'Maven Surefire Results',
+                false,
+            );
+            for (const item of treeBuilder.getAllMethodItems()) {
+                activeExternalRun.started(item);
+            }
+        }
 
         if (debounceTimer !== undefined) {
             clearTimeout(debounceTimer);
@@ -57,8 +77,13 @@ export function startReportWatcher(
             debounceTimer = undefined;
             const paths = Array.from(pendingUris).filter((p) => !_processedByUiRun.has(p));
             pendingUris.clear();
-            if (paths.length === 0) { return; }
-            flushReports(paths, controller, treeBuilder, outputChannel, context);
+            const run = activeExternalRun;
+            activeExternalRun = undefined;
+            if (paths.length === 0) {
+                run?.end();
+                return;
+            }
+            flushReports(paths, controller, treeBuilder, outputChannel, context, run);
         }, WATCHER_DEBOUNCE_MS);
     }
 
@@ -93,6 +118,7 @@ function flushReports(
     treeBuilder: TestTreeBuilder,
     outputChannel: vscode.OutputChannel,
     context: vscode.ExtensionContext,
+    existingRun?: vscode.TestRun,
 ): void {
     const results: SuiteResult[] = [];
 
@@ -106,6 +132,7 @@ function flushReports(
     }
 
     if (results.length === 0) {
+        existingRun?.end();
         return;
     }
 
@@ -113,8 +140,13 @@ function flushReports(
         `[Watcher] Detected ${xmlPaths.length} XML file(s) — parsed ${results.length} suite(s)`,
     );
 
-    // External run: persist = false (results come from outside VS Code)
-    publishResults(controller, treeBuilder, results, outputChannel, undefined);
+    // External run: persist = false (results come from outside VS Code).
+    // Pass existingRun so publishResults reuses it; we then end it ourselves since
+    // publishResults only auto-ends runs it creates internally.
+    publishResults(controller, treeBuilder, results, outputChannel, undefined, false, existingRun);
+    if (existingRun) {
+        existingRun.end();
+    }
     if (readSettings().runHistoryEnabled) {
         saveRunToHistory(context, results, 'External (watcher)');
     }
