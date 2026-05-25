@@ -105,10 +105,33 @@ function reportTestCase(
     invocationCounts.set(baseKey, count);
     const effectiveName = count > 1 ? `${tc.methodName}[${count}]` : tc.methodName;
 
-    // Try static method item first, then dynamically create one (handles
-    // inherited tests and @TestFactory dynamic tests missing from the scan).
-    const item = treeBuilder.findMethodItem(tc.className, effectiveName)
-        ?? treeBuilder.getOrCreateMethodItem(tc.className, effectiveName);
+    // Resolve the target TestItem:
+    //  1. Static method item (preferred — has URI + range for navigation).
+    //  2. Dynamic method item — only for methods that look like real tests:
+    //     parameterized instances (contain `[` or `(`), @TestFactory repeated invocations,
+    //     or methods on classes that weren't statically scanned (e.g. concrete subclasses).
+    //  3. Class item — fallback for class-level/setup errors (e.g. @BeforeAll throwing).
+    //     These have a synthetic name: empty, FQCN-like (contains `.`), or
+    //     "initializationError". Reporting on the class avoids phantom method items.
+    const staticItem = treeBuilder.findMethodItem(tc.className, effectiveName);
+    let item: vscode.TestItem | undefined;
+    if (staticItem) {
+        item = staticItem;
+    } else {
+        const classIsKnown = treeBuilder.findClassItem(tc.className) !== undefined;
+        const looksLikeRealMethod = effectiveName.length > 0
+            && !effectiveName.includes('.')         // FQCN → class-level error
+            && effectiveName !== 'initializationError';
+
+        if (classIsKnown && !looksLikeRealMethod) {
+            // Class-level / setup failure: report on the class item to avoid
+            // creating a phantom method entry in the sidebar.
+            item = treeBuilder.findClassItem(tc.className);
+        } else {
+            // Unknown class (concrete subclass) or parameterized/inherited method.
+            item = treeBuilder.getOrCreateMethodItem(tc.className, effectiveName);
+        }
+    }
 
     if (!item) {
         outputChannel.appendLine(`[Results] NO ITEM: ${tc.className}#${effectiveName} (raw: ${tc.methodName})`);
@@ -164,10 +187,11 @@ function buildTestMessage(tc: TestCaseResult, item: vscode.TestItem): vscode.Tes
         );
     }
 
-    // Set location to the test item's source position for "Go to failure" navigation
-    if (item.uri) {
-        const position = item.range?.start ?? new vscode.Position(0, 0);
-        message.location = new vscode.Location(item.uri, position);
+    // Set location to the test item's source position for "Go to failure" navigation.
+    // Only set if range is known — falling back to (0,0) pins the annotation to the
+    // package declaration on line 1, which is misleading for class-level errors.
+    if (item.uri && item.range) {
+        message.location = new vscode.Location(item.uri, item.range.start);
     }
 
     // Build structured stack frames for VS Code stack trace navigation
