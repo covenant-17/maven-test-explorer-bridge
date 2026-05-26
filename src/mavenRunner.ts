@@ -89,7 +89,7 @@ export function runMaven(
 
         const cancellationSubscription = token.onCancellationRequested(() => {
             outputChannel.appendLine('[Maven] Run cancelled by user.');
-            proc.kill();
+            killProcessTree(proc, outputChannel);
             resolve({ exitCode: -1, cancelled: true });
         });
 
@@ -238,4 +238,24 @@ function tokenizeArgs(value: string): string[] {
         }
     }
     return tokens;
+}
+
+/**
+ * Terminates a spawned process and its entire child process tree.
+ *
+ * On Windows, `proc.kill()` only kills the immediate shell wrapper (cmd.exe)
+ * spawned by `shell: true`, leaving the Java/Maven subprocess alive.
+ * `taskkill /F /T /PID` kills the full tree including all descendants.
+ * On non-Windows platforms the standard SIGTERM is sufficient.
+ */
+function killProcessTree(proc: cp.ChildProcess, outputChannel: vscode.OutputChannel): void {
+    if (process.platform === 'win32' && proc.pid !== undefined) {
+        cp.spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: false })
+            .on('error', (err) => {
+                outputChannel.appendLine(`[Maven] taskkill error: ${err.message} — falling back to proc.kill()`);
+                proc.kill();
+            });
+    } else {
+        proc.kill();
+    }
 }
