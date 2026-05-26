@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.6] — 2026-05-26
+
+### Fixed
+
+- **@BeforeAll failure now visible in sidebar** — when JUnit 5 `@BeforeAll` (or a static initializer) throws before any test runs, Surefire records the error on the `<testsuite>` element with no `<testcase>` children. The extension now detects this and synthesises a `@BeforeAll` child node under the failing class, showing the full error message and stack trace. Previously the class showed a red marker but no clickable test entry.
+
+---
+
 ## [0.2.2] — 2026-05-11
 
 ### Added
