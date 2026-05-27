@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.7] — 2026-05-27
+
+### Fixed
+
+- **`@BeforeAll` error pinned to annotation line** — the `@BeforeAll` sidebar node now resolves the exact source line of the annotation in the Java file (skipping javadoc/comment occurrences) and sets `item.range` accordingly, so the inline error peek appears directly on `@BeforeAll` rather than at the top of the file.
+- **Error output in test results panel** — for any `error`/`failed` test the exception type, message, and full stack trace are now streamed to the Output tab of the Test Results panel in addition to being shown in the peek view.
+
+---
+
 ## [0.2.6] — 2026-05-26
 
 ### Fixed
