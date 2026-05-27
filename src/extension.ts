@@ -508,7 +508,11 @@ function registerCommands(
                             if (seg.includes('#')) {
                                 const [cls, method] = seg.split('#', 2);
                                 if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
-                                classMethodMap.get(cls)!.push(method);
+                                // Lifecycle annotations (@BeforeAll etc.) are not runnable methods —
+                                // run the whole class instead.
+                                if (!method.startsWith('@')) {
+                                    classMethodMap.get(cls)!.push(method);
+                                }
                             } else {
                                 if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
                             }
@@ -602,7 +606,11 @@ function registerCommands(
                         if (seg.includes('#')) {
                             const [cls, method] = seg.split('#', 2);
                             if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
-                            classMethodMap.get(cls)!.push(method);
+                            // Lifecycle annotations (@BeforeAll etc.) are not runnable methods —
+                            // run the whole class instead.
+                            if (!method.startsWith('@')) {
+                                classMethodMap.get(cls)!.push(method);
+                            }
                         } else {
                             if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
                         }

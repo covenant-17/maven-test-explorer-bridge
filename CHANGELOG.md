@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.8] — 2026-05-27
+
+### Fixed
+
+- **Copy context menu works for `@BeforeAll`** — "Copy Maven Command" now generates a valid class-level `-Dtest=ClassName` instead of the invalid `ClassName#@BeforeAll`; all other copy actions (class name, package, full path, method name) work as expected.
+
+---
+
 ## [0.2.7] — 2026-05-27
 
 ### Fixed
