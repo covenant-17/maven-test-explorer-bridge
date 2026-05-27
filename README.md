@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-0.2.5-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.6-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -34,6 +34,7 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 - **Re-run Failed** — reruns only the classes that failed in the last run
 - **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
+- **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
 
 ---
 

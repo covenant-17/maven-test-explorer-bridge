@@ -187,11 +187,12 @@ function buildTestMessage(tc: TestCaseResult, item: vscode.TestItem): vscode.Tes
         );
     }
 
-    // Set location to the test item's source position for "Go to failure" navigation.
-    // Only set if range is known — falling back to (0,0) pins the annotation to the
-    // package declaration on line 1, which is misleading for class-level errors.
-    if (item.uri && item.range) {
-        message.location = new vscode.Location(item.uri, item.range.start);
+    // Set location for "Go to failure" navigation.
+    // Prefer the exact range; fall back to the start of the file so that
+    // dynamically-created items (e.g. @BeforeAll) still get an inline annotation.
+    if (item.uri) {
+        const pos = item.range ? item.range.start : new vscode.Position(0, 0);
+        message.location = new vscode.Location(item.uri, pos);
     }
 
     // Build structured stack frames for VS Code stack trace navigation
@@ -248,6 +249,17 @@ function buildStackFrames(stackTrace: string): vscode.TestMessageStackFrame[] {
 }
 
 function appendTestOutput(run: vscode.TestRun, item: vscode.TestItem, tc: TestCaseResult): void {
+    if (tc.status === 'error' || tc.status === 'failed') {
+        if (tc.failureType || tc.failureMessage) {
+            const header = tc.failureType
+                ? `${tc.failureType}: ${tc.failureMessage ?? ''}`
+                : (tc.failureMessage ?? '');
+            run.appendOutput(`${header}\r\n`, undefined, item);
+        }
+        if (tc.stackTrace) {
+            run.appendOutput(`${tc.stackTrace}\r\n`, undefined, item);
+        }
+    }
     if (tc.systemOut) {
         run.appendOutput(`[stdout] ${tc.systemOut}\r\n`, undefined, item);
     }

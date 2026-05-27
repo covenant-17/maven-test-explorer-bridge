@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { MavenModule } from './mavenProjectDetector';
 import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
 import { SuiteResult } from './surefireParser';
@@ -114,7 +115,22 @@ export class TestTreeBuilder {
             return undefined;
         }
         const methodId = `${classItem.id}#${methodName}`;
-        const methodItem = this.controller.createTestItem(methodId, `$(symbol-method) ${methodName}()`, classItem.uri);
+        // Lifecycle annotations (e.g. @BeforeAll) start with '@' — omit '()' suffix.
+        const methodLabel = methodName.startsWith('@')
+            ? `$(symbol-event) ${methodName}`
+            : `$(symbol-method) ${methodName}()`;
+        const methodItem = this.controller.createTestItem(methodId, methodLabel, classItem.uri);
+        // For lifecycle entries, find the annotation in the source file and set range
+        // so the error annotation appears on the correct line in the editor.
+        if (methodName.startsWith('@') && classItem.uri) {
+            const line = findAnnotationLine(classItem.uri.fsPath, methodName);
+            if (line !== undefined) {
+                methodItem.range = new vscode.Range(
+                    new vscode.Position(line, 0),
+                    new vscode.Position(line, 0),
+                );
+            }
+        }
         this.methodItems.set(`${fqcn}#${methodName}`, methodItem);
         // Append to class children
         const children: vscode.TestItem[] = [];
@@ -377,6 +393,30 @@ export class TestTreeBuilder {
         this.methodItems.set(`${fqcn}#${method.name}`, methodItem);
         return methodItem;
     }
+}
+
+// -------------------------------------------------------------------------
+
+/**
+ * Scans a Java source file for a lifecycle annotation (e.g. "@BeforeAll") and
+ * returns the 0-based line index of the annotation, or undefined if not found.
+ */
+function findAnnotationLine(filePath: string, annotationName: string): number | undefined {
+    let content: string;
+    try {
+        content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+        return undefined;
+    }
+    const tag = annotationName.slice(1); // strip leading '@'
+    const pattern = new RegExp(`^\\s*@${tag}\\b`);
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        if (pattern.test(lines[i])) {
+            return i;
+        }
+    }
+    return undefined;
 }
 
 // -------------------------------------------------------------------------

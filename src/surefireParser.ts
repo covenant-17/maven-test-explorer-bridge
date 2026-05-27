@@ -75,31 +75,16 @@ function parseXmlContent(content: string, xmlPath: string): SuiteResult | undefi
         }
     }
 
-    // Suite-level <error> (no <testcase> children) — emitted by Surefire when
-    // @BeforeAll / @ClassRule / static initializer throws before any test runs.
-    // Synthesise a virtual "@BeforeAll" entry so the failure is visible in the sidebar.
-    if (rawTestCases.length === 0) {
-        const suiteErrors = (suite['error'] as Array<Record<string, unknown>>) ?? [];
-        for (const err of suiteErrors) {
-            testCases.push({
-                className: suiteName,
-                methodName: '@BeforeAll',
-                status: 'error',
-                durationMs: 0,
-                failureMessage: extractAttribute(err, '@_message'),
-                failureType: extractAttribute(err, '@_type'),
-                stackTrace: extractText(err['#text'] ?? err),
-                systemOut: undefined,
-                systemErr: undefined,
-            });
-        }
-    }
-
     return { suiteName, xmlPath, testCases };
 }
 
 function parseTestCase(tc: Record<string, unknown>): TestCaseResult | undefined {
-    const methodName = String(tc['@_name'] ?? '');
+    // Surefire 3.x emits <testcase name=""> (empty name) when a lifecycle method
+    // such as @BeforeAll throws before any individual test runs.  Rename it so
+    // the publisher creates a visible '@BeforeAll' node instead of silently
+    // falling back to the class item.
+    const rawName = String(tc['@_name'] ?? '');
+    const methodName = rawName === '' ? '@BeforeAll' : rawName;
     const className = String(tc['@_classname'] ?? '');
     const timeSeconds = Number(tc['@_time'] ?? 0);
     const durationMs = Math.round(timeSeconds * 1000);
