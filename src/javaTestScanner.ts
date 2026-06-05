@@ -6,6 +6,7 @@ export interface MethodInfo {
     readonly name: string;
     readonly displayName: string | undefined;
     readonly line: number;
+    readonly tags: readonly string[];
 }
 
 export interface TestClassInfo {
@@ -17,6 +18,7 @@ export interface TestClassInfo {
      */
     readonly className: string;
     readonly displayName: string | undefined;
+    readonly tags: readonly string[];
     readonly methods: readonly MethodInfo[];
 }
 
@@ -26,6 +28,7 @@ interface ClassFrame {
     fullName: string;
     openDepth: number;
     displayName: string | undefined;
+    tags: string[];
     methods: MethodInfo[];
     seen: Set<string>;
 }
@@ -34,6 +37,7 @@ const PACKAGE_PATTERN = /^\s*package\s+([\w.]+)\s*;/m;
 const DISPLAY_NAME_PATTERN = /@DisplayName\s*\(\s*"([^"]+)"\s*\)/;
 const TEST_ANNOTATION_PATTERN = /@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b/;
 const NESTED_ANNOTATION_PATTERN = /@Nested\b/;
+const TAG_ANNOTATION_PATTERN = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
 const CLASS_DECL_PATTERN = /(?:^|\s)(?:class|interface)\s+(\w+)/;
 // Matches @Test void method(), @TestFactory Stream<X> method(), default void method()
 const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private|default)\s+)?(?:static\s+)?(?:final\s+)?(?:void|\w[\w.<>,\s]*)\s+(\w+)\s*\(/;
@@ -94,6 +98,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     let pendingNested = false;
     let pendingDisplayName: string | undefined;
     let pendingTestAnnotation = false;
+    let pendingTags: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
         const trimmed = lines[i].trim();
@@ -114,6 +119,12 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
         if (TEST_ANNOTATION_PATTERN.test(trimmed)) {
             pendingTestAnnotation = true;
         }
+        // Collect @Tag("...") — may appear multiple times on the same line
+        TAG_ANNOTATION_PATTERN.lastIndex = 0;
+        let tagMatch: RegExpExecArray | null;
+        while ((tagMatch = TAG_ANNOTATION_PATTERN.exec(trimmed)) !== null) {
+            pendingTags.push(tagMatch[1]);
+        }
 
         // --- Class declaration (outer class or @Nested) ---
         const classMatch = CLASS_DECL_PATTERN.exec(trimmed);
@@ -127,12 +138,14 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                 fullName,
                 openDepth: braceDepth,
                 displayName: pendingDisplayName,
+                tags: [...pendingTags],
                 methods: [],
                 seen: new Set(),
             });
             pendingNested = false;
             pendingDisplayName = undefined;
             pendingTestAnnotation = false; // @Test before a class is irrelevant
+            pendingTags = [];
         }
 
         // --- Test method declaration ---
@@ -143,10 +156,11 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                 const frame = classStack[classStack.length - 1];
                 if (!frame.seen.has(methodName)) {
                     frame.seen.add(methodName);
-                    frame.methods.push({ name: methodName, displayName: pendingDisplayName, line: i + 1 });
+                    frame.methods.push({ name: methodName, displayName: pendingDisplayName, line: i + 1, tags: [...pendingTags] });
                 }
                 pendingTestAnnotation = false;
                 pendingDisplayName = undefined;
+                pendingTags = [];
             }
         }
 
@@ -163,6 +177,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                         packageName,
                         className: frame.fullName,
                         displayName: frame.displayName,
+                        tags: frame.tags,
                         methods: frame.methods,
                     });
                 }
@@ -173,7 +188,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     // Flush any frames left unclosed (malformed Java — shouldn't happen in practice)
     while (classStack.length > 0) {
         const frame = classStack.pop()!;
-        completed.push({ filePath, packageName, className: frame.fullName, displayName: frame.displayName, methods: frame.methods });
+        completed.push({ filePath, packageName, className: frame.fullName, displayName: frame.displayName, tags: frame.tags, methods: frame.methods });
     }
 
     return completed;

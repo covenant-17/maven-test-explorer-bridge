@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.9] — 2026-06-05
+
+### Added
+
+- **JUnit `@Tag` filtering** — `@Tag("smoke")`, `@Tag("coverage")` and any other JUnit 5 tag annotations on classes and methods are now read during source scan and registered as native VS Code test tags. Use the filter box in Test Explorer (type `@tagname`) to show only matching tests. Tags on a class are automatically inherited by all its methods.
+
+---
+
 ## [0.2.8] — 2026-05-27
 
 ### Fixed

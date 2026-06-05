@@ -323,7 +323,10 @@ export class TestTreeBuilder {
                 cls.displayName ? `$(symbol-class) ${cls.displayName}` : `$(symbol-class) ${simpleName}`,
                 classUri,
             );
-            classItem.tags = [TAG_CLASS];
+            classItem.tags = [
+                TAG_CLASS,
+                ...cls.tags.map((t) => new vscode.TestTag(t)),
+            ];
 
             const fqcn = buildFqcn(packageName, cls.className);
             this.classItems.set(fqcn, classItem);
@@ -337,7 +340,7 @@ export class TestTreeBuilder {
             const fqcn = buildFqcn(packageName, cls.className);
 
             const methodItems = cls.methods.map((method) =>
-                this.buildMethodItem(classId, classItem.uri, fqcn, method),
+                this.buildMethodItem(classId, classItem.uri, fqcn, method, cls.tags),
             );
             classItem.children.replace(methodItems);
         }
@@ -377,6 +380,7 @@ export class TestTreeBuilder {
         classUri: vscode.Uri | undefined,
         fqcn: string,
         method: MethodInfo,
+        classTags: readonly string[] = [],
     ): vscode.TestItem {
         const methodId = `${classId}#${method.name}`;
         const methodItem = this.controller.createTestItem(
@@ -384,7 +388,10 @@ export class TestTreeBuilder {
             method.displayName ? `$(symbol-method) ${method.displayName}` : `$(symbol-method) ${method.name}()`,
             classUri,
         );
-        methodItem.tags = [TAG_METHOD];
+        methodItem.tags = [
+            TAG_METHOD,
+            ...new Set([...classTags, ...method.tags]).values(),
+        ].map((t) => typeof t === 'string' ? new vscode.TestTag(t) : t);
         const zeroBasedLine = Math.max(0, method.line - 1);
         methodItem.range = new vscode.Range(
             new vscode.Position(zeroBasedLine, 0),
