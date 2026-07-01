@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.10] — 2026-07-01
+
+### Added
+
+- **Filter expressions** — added `Maven: Apply Test Filter Expression` with `AND` / `&&`, `OR` / `||`, parentheses, text terms, JUnit tags and result tags such as `@failed`; for example `@mavenTestExplorer:needCodeReviewD24 OR @failed`.
+
+---
+
 ## [0.2.9] — 2026-06-05
 
 ### Added

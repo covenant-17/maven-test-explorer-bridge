@@ -42,6 +42,8 @@ export const CMD_CLEAR_RESULTS_AND_HISTORY = 'mavenTestExplorer.clearResultsAndH
 export const CMD_SHOW_HISTORY = 'mavenTestExplorer.showHistory';
 export const CMD_ATTACH_TO_COPILOT = 'mavenTestExplorer.attachToCopilot';
 export const CMD_ATTACH_TO_CLAUDE = 'mavenTestExplorer.attachToClaude';
+export const CMD_APPLY_FILTER = 'mavenTestExplorer.applyFilter';
+export const CMD_CLEAR_FILTER = 'mavenTestExplorer.clearFilter';
 
 // Glob patterns
 export const POM_GLOB = '**/pom.xml';

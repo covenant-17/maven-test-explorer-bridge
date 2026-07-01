@@ -7,6 +7,7 @@ import { readSettings } from './settings';
 
 export const TAG_CLASS = new vscode.TestTag('mavenTestExplorer.class');
 export const TAG_METHOD = new vscode.TestTag('mavenTestExplorer.method');
+const RESULT_STATUS_TAGS = new Set(['passed', 'failed', 'error', 'skipped']);
 
 /**
  * Builds and maintains the VS Code TestItem hierarchy.
@@ -203,10 +204,6 @@ export class TestTreeBuilder {
      */
     updateAggregates(suiteResults: readonly SuiteResult[]): void {
         const settings = readSettings();
-        if (!settings.showStats) {
-            return;
-        }
-        const statsFormat = settings.statsFormat;
 
         // --- Step 1: direct stats per FQCN from suite results ---
         // Cross-suite dedup: Surefire reports parent-class methods in nested-class
@@ -231,6 +228,11 @@ export class TestTreeBuilder {
                 else if (tc.status === 'failed')  { s.failed++;  }
                 else if (tc.status === 'error')   { s.error++;   }
                 else if (tc.status === 'skipped') { s.skipped++; }
+
+                const methodItem = this.methodItems.get(`${tc.className}#${tc.methodName}`);
+                if (methodItem) {
+                    setResultStatusTags(methodItem, statusesFor(tc.status));
+                }
             }
             for (const key of claimedByThisSuite) {
                 claimedByPreviousSuite.add(key);
@@ -256,6 +258,16 @@ export class TestTreeBuilder {
         }
 
         // --- Step 3: apply description to class items ---
+        for (const [fqcn, classItem] of this.classItems) {
+            setResultStatusTags(classItem, statusesForStats(classAgg.get(fqcn)!));
+        }
+
+        if (!settings.showStats) {
+            return;
+        }
+        const statsFormat = settings.statsFormat;
+
+        // --- Step 3b: apply description to class items ---
         for (const [fqcn, classItem] of this.classItems) {
             classItem.description = formatStats(classAgg.get(fqcn)!, statsFormat);
         }
@@ -470,6 +482,30 @@ function accumulate(map: Map<string, AggStats>, key: string, stats: AggStats): v
         map.set(key, existing);
     }
     addInto(existing, stats);
+}
+
+function setResultStatusTags(item: vscode.TestItem, statuses: readonly string[]): void {
+    const existing = item.tags.filter((tag) => !RESULT_STATUS_TAGS.has(tag.id));
+    item.tags = [
+        ...existing,
+        ...statuses.map((status) => new vscode.TestTag(status)),
+    ];
+}
+
+function statusesFor(status: SuiteResult['testCases'][number]['status']): string[] {
+    if (status === 'error') {
+        return ['error', 'failed'];
+    }
+    return [status];
+}
+
+function statusesForStats(stats: AggStats): string[] {
+    const statuses: string[] = [];
+    if (stats.passed > 0) { statuses.push('passed'); }
+    if (stats.failed > 0 || stats.error > 0) { statuses.push('failed'); }
+    if (stats.error > 0) { statuses.push('error'); }
+    if (stats.skipped > 0) { statuses.push('skipped'); }
+    return statuses;
 }
 
 function formatStats(stats: AggStats, format: string): string {

@@ -38,14 +38,18 @@ import {
     CMD_SHOW_HISTORY,
     CMD_ATTACH_TO_COPILOT,
     CMD_ATTACH_TO_CLAUDE,
+    CMD_APPLY_FILTER,
+    CMD_CLEAR_FILTER,
 } from './constants';
 import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
 import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
+import { filterClassesByExpression, parseFilterExpression } from './filterExpression';
 
 // Tracks failed class names across runs for the "Re-run Failed" command
 let lastFailedClassNames: string[] = [];
 // Current set of Maven modules — updated on every refresh
 let currentModules: MavenModule[] = [];
+let activeFilterExpression: string | undefined;
 let _diagChannel: vscode.OutputChannel | undefined;
 // Cache of the last known SuiteResult per class name — used to compute full
 // aggregates after partial runs without losing results from other classes.
@@ -447,6 +451,41 @@ function registerCommands(
             vscode.window.showInformationMessage('Maven Test Explorer: Test reports cleaned.');
         }),
 
+        vscode.commands.registerCommand(CMD_APPLY_FILTER, async () => {
+            const expression = await vscode.window.showInputBox({
+                title: 'Maven Test Filter Expression',
+                prompt: 'Use text, @tags, @failed, AND/&&, OR/|| and parentheses.',
+                placeHolder: '@mavenTestExplorer:needCodeReviewD24 OR @failed',
+                value: activeFilterExpression,
+            });
+            if (expression === undefined) {
+                return;
+            }
+            const trimmed = expression.trim();
+            if (trimmed.length === 0) {
+                activeFilterExpression = undefined;
+            } else {
+                try {
+                    parseFilterExpression(trimmed);
+                    activeFilterExpression = trimmed;
+                } catch {
+                    vscode.window.showErrorMessage('Maven Test Explorer: Invalid filter expression.');
+                    return;
+                }
+            }
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
+            const message = activeFilterExpression
+                ? `Maven Test Explorer: Filter applied: ${activeFilterExpression}`
+                : 'Maven Test Explorer: Filter cleared.';
+            vscode.window.showInformationMessage(message);
+        }),
+
+        vscode.commands.registerCommand(CMD_CLEAR_FILTER, async () => {
+            activeFilterExpression = undefined;
+            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
+            vscode.window.showInformationMessage('Maven Test Explorer: Filter cleared.');
+        }),
+
         vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, async () => {
             const settings = readSettings();
             const resolvedExecutable = currentModules.length > 0
@@ -816,8 +855,19 @@ async function buildTree(
     const { testSourceGlobs } = readSettings();
     const modulesWithClasses: Array<{ module: MavenModule; classes: Awaited<ReturnType<typeof scanTestFiles>> }> = [];
 
+    if (restoreResults) {
+        restoreResultCacheIfNeeded(context, modules, outputChannel);
+    }
+
+    const parsedFilter = activeFilterExpression
+        ? parseFilterExpression(activeFilterExpression)
+        : undefined;
+
     for (const module of modules) {
-        const classes = await scanTestFiles(module.moduleDir, testSourceGlobs);
+        let classes = await scanTestFiles(module.moduleDir, testSourceGlobs);
+        if (parsedFilter) {
+            classes = filterClassesByExpression(classes, parsedFilter, Array.from(resultCache.values()));
+        }
         modulesWithClasses.push({ module, classes });
         outputChannel.appendLine(
             `[Discovery] ${module.artifactId}: ${classes.length} test class(es)`,
@@ -830,21 +880,6 @@ async function buildTree(
         return;
     }
 
-    // Restore aggregation: prefer persisted cache, fall back to XML files on disk
-    resultCache.clear();
-    const persisted = loadResultCache(context, outputChannel);
-    if (persisted.size > 0) {
-        for (const [k, v] of persisted) { resultCache.set(k, v); }
-        outputChannel.appendLine(`[Extension] Restored ${resultCache.size} cached result(s) from workspace state`);
-    } else {
-        // First launch or after cache was cleared — read from disk
-        const settings = readSettings();
-        for (const module of modules) {
-            const existing = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-            updateResultCache(existing, new Set());
-        }
-    }
-
     // Replay cached results into a persistent TestRun to restore icons
     if (resultCache.size > 0) {
         const restoreRun = controller.createTestRun(new vscode.TestRunRequest(), 'Restored Results', true);
@@ -853,6 +888,29 @@ async function buildTree(
     }
 
     treeBuilder.updateAggregates(Array.from(resultCache.values()));
+}
+
+function restoreResultCacheIfNeeded(
+    context: vscode.ExtensionContext,
+    modules: readonly MavenModule[],
+    outputChannel: vscode.OutputChannel,
+): void {
+    if (resultCache.size > 0) {
+        return;
+    }
+
+    const persisted = loadResultCache(context, outputChannel);
+    if (persisted.size > 0) {
+        for (const [k, v] of persisted) { resultCache.set(k, v); }
+        outputChannel.appendLine(`[Extension] Restored ${resultCache.size} cached result(s) from workspace state`);
+        return;
+    }
+
+    const settings = readSettings();
+    for (const module of modules) {
+        const existing = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
+        updateResultCache(existing, new Set());
+    }
 }
 
 /**
