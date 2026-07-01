@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-0.2.10-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.11-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -32,11 +32,11 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
-- **Filter expressions** — apply tree filters with `AND` / `&&`, `OR` / `||`, text terms, JUnit tags and result tags such as `@failed`
+- **Advanced filter** — use the Testing sidebar filter button for `AND` / `&&`, `OR` / `||`, text terms, JUnit tags and result tags such as `@mavenTestExplorer:status.failed`; submit an empty expression to clear it
 - **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
-- **JUnit `@Tag` filtering** — `@Tag("smoke")` / `@Tag("coverage")` annotations on classes and methods are read at scan time and exposed as VS Code test tags; use the filter box in Test Explorer (e.g. `@smoke`) to show only matching items. Method-level tags inherit class-level tags automatically. For richer expressions, run `Maven: Apply Test Filter Expression`, for example `@mavenTestExplorer:needCodeReviewD24 OR @failed`
+- **JUnit `@Tag` filtering** — `@Tag("smoke")` / `@Tag("coverage")` annotations on classes and methods are read at scan time and exposed as VS Code test tags; use the filter box in Test Explorer (e.g. `@smoke`) to show only matching items. Method-level tags inherit class-level tags automatically. Result tags use the extension namespace, e.g. `@mavenTestExplorer:status.failed`. For richer expressions, use the Testing sidebar `Maven: Advanced Filter (AND / OR)` button, for example `@mavenTestExplorer:needCodeReviewD24 OR @mavenTestExplorer:status.failed`
 
 ---
 
@@ -80,7 +80,7 @@ All commands are available via **Command Palette** (`Ctrl+Shift+P`):
 | `Maven: Copy Maven Command for Test` | Copy the last Maven command to clipboard |
 | `Maven: Clear Test Results` | Reset all result icons to neutral |
 | `Maven: Show Run History` | Browse and restore past runs |
-| `Maven: Apply Test Filter Expression` | Filter the Test Explorer tree with `AND` / `&&`, `OR` / `||`, text terms, tags and result states |
+| `Maven: Advanced Filter (AND / OR)` | Filter the Test Explorer tree with `AND` / `&&`, `OR` / `||`, text terms, tags and result states |
 | `Maven: Clear Test Filter Expression` | Restore the full Test Explorer tree |
 
 ---

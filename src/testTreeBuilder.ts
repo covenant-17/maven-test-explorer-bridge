@@ -5,9 +5,8 @@ import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
 import { SuiteResult } from './surefireParser';
 import { readSettings } from './settings';
 
-export const TAG_CLASS = new vscode.TestTag('mavenTestExplorer.class');
-export const TAG_METHOD = new vscode.TestTag('mavenTestExplorer.method');
-const RESULT_STATUS_TAGS = new Set(['passed', 'failed', 'error', 'skipped']);
+const RESULT_STATUS_NAMES = ['passed', 'failed', 'error', 'skipped'] as const;
+const RESULT_STATUS_TAGS = new Set(RESULT_STATUS_NAMES.map(statusTagId));
 
 /**
  * Builds and maintains the VS Code TestItem hierarchy.
@@ -336,7 +335,6 @@ export class TestTreeBuilder {
                 classUri,
             );
             classItem.tags = [
-                TAG_CLASS,
                 ...cls.tags.map((t) => new vscode.TestTag(t)),
             ];
 
@@ -401,7 +399,6 @@ export class TestTreeBuilder {
             classUri,
         );
         methodItem.tags = [
-            TAG_METHOD,
             ...new Set([...classTags, ...method.tags]).values(),
         ].map((t) => typeof t === 'string' ? new vscode.TestTag(t) : t);
         const zeroBasedLine = Math.max(0, method.line - 1);
@@ -488,8 +485,12 @@ function setResultStatusTags(item: vscode.TestItem, statuses: readonly string[])
     const existing = item.tags.filter((tag) => !RESULT_STATUS_TAGS.has(tag.id));
     item.tags = [
         ...existing,
-        ...statuses.map((status) => new vscode.TestTag(status)),
+        ...statuses.map((status) => new vscode.TestTag(statusTagId(status))),
     ];
+}
+
+function statusTagId(status: string): string {
+    return `status.${status}`;
 }
 
 function statusesFor(status: SuiteResult['testCases'][number]['status']): string[] {

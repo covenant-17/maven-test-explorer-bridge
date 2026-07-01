@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.11] — 2026-07-01
+
+### Improved
+
+- **Advanced filter UX** — moved the AND / OR filter entry point into the Testing sidebar, removed the extra clear button, switched result tags to `@mavenTestExplorer:status.*`, and removed internal class/method tags from filter suggestions.
+
+---
+
 ## [0.2.10] — 2026-07-01
 
 ### Added

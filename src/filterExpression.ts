@@ -257,11 +257,15 @@ function buildMethodFacts(
 }
 
 function statusAliases(tc: TestCaseResult): Set<string> {
-    const aliases = new Set<string>([tc.status]);
+    const aliases = new Set<string>([statusTagId(tc.status)]);
     if (tc.status === 'error') {
-        aliases.add('failed');
+        aliases.add(statusTagId('failed'));
     }
     return aliases;
+}
+
+function statusTagId(status: string): string {
+    return `status.${status}`;
 }
 
 function normalize(value: string): string {

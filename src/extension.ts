@@ -454,8 +454,8 @@ function registerCommands(
         vscode.commands.registerCommand(CMD_APPLY_FILTER, async () => {
             const expression = await vscode.window.showInputBox({
                 title: 'Maven Test Filter Expression',
-                prompt: 'Use text, @tags, @failed, AND/&&, OR/|| and parentheses.',
-                placeHolder: '@mavenTestExplorer:needCodeReviewD24 OR @failed',
+                prompt: 'Supports AND/&&, OR/|| and parentheses. Tags like @tag and @mavenTestExplorer:status.failed also work in the default Testing sidebar input.',
+                placeHolder: 'text, @tag, @mavenTestExplorer:status.failed, AND/&&, OR/||, parentheses',
                 value: activeFilterExpression,
             });
             if (expression === undefined) {
