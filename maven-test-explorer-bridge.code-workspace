@@ -2,6 +2,12 @@
 	"folders": [
 		{
 			"path": "."
+		},
+		{
+			"path": "../annotation-linker"
+		},
+		{
+			"path": "../javaTest"
 		}
 	]
 }
