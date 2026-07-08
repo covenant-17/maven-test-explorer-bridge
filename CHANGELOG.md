@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.12] - 2026-07-08
+
+### Added
+
+- **Clickable JUnit tags** - `@Tag("...")` values in Java source now act as editor links that apply the matching Maven Test Explorer filter.
+
+---
+
 ## [0.2.11] — 2026-07-01
 
 ### Improved

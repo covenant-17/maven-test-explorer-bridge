@@ -181,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register commands
     registerCommands(context, controller, treeBuilder, outputChannel);
+    registerTagDocumentLinks(context);
 
     outputChannel.appendLine('[Extension] Maven Test Explorer Bridge activated.');
 }
@@ -451,13 +452,15 @@ function registerCommands(
             vscode.window.showInformationMessage('Maven Test Explorer: Test reports cleaned.');
         }),
 
-        vscode.commands.registerCommand(CMD_APPLY_FILTER, async () => {
-            const expression = await vscode.window.showInputBox({
-                title: 'Maven Test Filter Expression',
-                prompt: 'Supports AND/&&, OR/|| and parentheses. Tags like @tag and @mavenTestExplorer:status.failed also work in the default Testing sidebar input.',
-                placeHolder: 'text, @tag, @mavenTestExplorer:status.failed, AND/&&, OR/||, parentheses',
-                value: activeFilterExpression,
-            });
+        vscode.commands.registerCommand(CMD_APPLY_FILTER, async (expressionArg?: string) => {
+            const expression = typeof expressionArg === 'string'
+                ? expressionArg
+                : await vscode.window.showInputBox({
+                    title: 'Maven Test Filter Expression',
+                    prompt: 'Supports AND/&&, OR/|| and parentheses. Tags like @tag and @mavenTestExplorer:status.failed also work in the default Testing sidebar input.',
+                    placeHolder: 'text, @tag, @mavenTestExplorer:status.failed, AND/&&, OR/||, parentheses',
+                    value: activeFilterExpression,
+                });
             if (expression === undefined) {
                 return;
             }
@@ -824,6 +827,48 @@ function registerCommands(
             }
             try { await vscode.commands.executeCommand('claude-vscode.focus'); } catch { /* not installed */ }
         }),
+    );
+}
+
+function registerTagDocumentLinks(context: vscode.ExtensionContext): void {
+    context.subscriptions.push(
+        vscode.languages.registerDocumentLinkProvider(
+            { language: 'java', scheme: 'file' },
+            {
+                provideDocumentLinks(document): vscode.DocumentLink[] {
+                    const links: vscode.DocumentLink[] = [];
+                    const tagPattern = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
+
+                    for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
+                        const line = document.lineAt(lineIndex);
+                        tagPattern.lastIndex = 0;
+
+                        let match: RegExpExecArray | null;
+                        while ((match = tagPattern.exec(line.text)) !== null) {
+                            const tagName = match[1].trim();
+                            if (!tagName) {
+                                continue;
+                            }
+
+                            const tagStart = line.text.indexOf(match[1], match.index);
+                            const range = new vscode.Range(
+                                new vscode.Position(lineIndex, tagStart),
+                                new vscode.Position(lineIndex, tagStart + match[1].length),
+                            );
+                            const args = encodeURIComponent(JSON.stringify([`@${tagName}`]));
+                            const link = new vscode.DocumentLink(
+                                range,
+                                vscode.Uri.parse(`command:${CMD_APPLY_FILTER}?${args}`),
+                            );
+                            link.tooltip = `Filter Maven Test Explorer by @${tagName}`;
+                            links.push(link);
+                        }
+                    }
+
+                    return links;
+                },
+            },
+        ),
     );
 }
 
