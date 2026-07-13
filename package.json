@@ -1,7 +1,7 @@
 {
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
-  "description": "Bridges Maven/Surefire test results into the VS Code Testing sidebar.",
+  "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
   "version": "0.2.12",
   "publisher": "covenant-17",
   "license": "MIT",
@@ -25,6 +25,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onView:mavenTestExplorer.view",
     "workspaceContains:**/pom.xml"
   ],
   "contributes": {
@@ -128,45 +129,37 @@
         "icon": "$(comment-discussion)"
       }
     ],
+    "views": {
+      "test": [
+        {
+          "type": "webview",
+          "id": "mavenTestExplorer.view",
+          "name": "Maven Test Explorer"
+        }
+      ]
+    },
     "submenus": [],
     "menus": {
-      "testing/item/context": [
-        {
-          "command": "mavenTestExplorer.copy",
-          "group": "9_maven_copy@1",
-          "when": "controllerId == 'mavenTestExplorer'"
-        },
-        {
-          "command": "mavenTestExplorer.attachToCopilot",
-          "group": "9_maven_copy@2",
-          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri"
-        },
-        {
-          "command": "mavenTestExplorer.attachToClaude",
-          "group": "9_maven_copy@3",
-          "when": "controllerId == 'mavenTestExplorer' && testItemHasUri"
-        }
-      ],
       "view/title": [
         {
           "command": "mavenTestExplorer.clearResults",
           "group": "navigation",
-          "when": "view == workbench.view.testing"
+          "when": "view == mavenTestExplorer.view"
         },
         {
           "command": "mavenTestExplorer.clearResultsAndHistory",
           "group": "overflow",
-          "when": "view == workbench.view.testing"
+          "when": "view == mavenTestExplorer.view"
         },
         {
           "command": "mavenTestExplorer.showHistory",
           "group": "navigation",
-          "when": "view == workbench.view.testing"
+          "when": "view == mavenTestExplorer.view"
         },
         {
           "command": "mavenTestExplorer.applyFilter",
           "group": "navigation",
-          "when": "view == workbench.view.testing"
+          "when": "view == mavenTestExplorer.view"
         }
       ]
     },

@@ -2,832 +2,473 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
-import { scanTestFiles } from './javaTestScanner';
-import { TestTreeBuilder } from './testTreeBuilder';
+import { scanTestFiles, TestClassInfo } from './javaTestScanner';
 import { parseReportFile, SuiteResult } from './surefireParser';
-import { publishResults } from './resultPublisher';
-import { startReportWatcher } from './reportWatcher';
 import {
-    runMaven,
+    buildRerunFailedArgs,
     buildRunAllArgs,
     buildRunClassArgs,
-    buildRunMethodArgs,
-    buildRerunFailedArgs,
     clearReportDirectories,
     resolveExecutable,
+    runMaven,
 } from './mavenRunner';
 import { readSettings } from './settings';
 import {
-    EXTENSION_ID,
-    CONTROLLER_LABEL,
-    OUTPUT_CHANNEL_NAME,
-    RUN_PROFILE_LABEL,
-    CMD_REFRESH_TESTS,
-    CMD_RUN_ALL_TESTS,
-    CMD_RERUN_FAILED,
+    CMD_APPLY_FILTER,
+    CMD_ATTACH_TO_CLAUDE,
+    CMD_ATTACH_TO_COPILOT,
     CMD_CLEAN_REPORTS,
-    CMD_COPY_MAVEN_COMMAND,
-    CMD_COPY,
-    CMD_COPY_ITEM_MAVEN_COMMAND,
-    CMD_COPY_CLASS_NAME,
-    CMD_COPY_METHOD_NAME,
-    CMD_COPY_PACKAGE_NAME,
-    CMD_COPY_FULL_PATH,
+    CMD_CLEAR_FILTER,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
+    CMD_COPY,
+    CMD_COPY_CLASS_NAME,
+    CMD_COPY_FULL_PATH,
+    CMD_COPY_ITEM_MAVEN_COMMAND,
+    CMD_COPY_MAVEN_COMMAND,
+    CMD_COPY_METHOD_NAME,
+    CMD_COPY_PACKAGE_NAME,
+    CMD_REFRESH_TESTS,
+    CMD_RERUN_FAILED,
+    CMD_RUN_ALL_TESTS,
     CMD_SHOW_HISTORY,
-    CMD_ATTACH_TO_COPILOT,
-    CMD_ATTACH_TO_CLAUDE,
-    CMD_APPLY_FILTER,
-    CMD_CLEAR_FILTER,
+    OUTPUT_CHANNEL_NAME,
 } from './constants';
-import { saveRunToHistory, loadHistory, clearHistory } from './runHistory';
-import { registerUiRunXmlPaths, clearUiRunXmlPaths } from './reportWatcher';
-import { filterClassesByExpression, parseFilterExpression } from './filterExpression';
+import { clearHistory, loadHistory, saveRunToHistory } from './runHistory';
+import {
+    buildCustomTree,
+    CustomTestNode,
+    CustomTreeSnapshot,
+    findRunnableClassTargets,
+    ModuleClasses,
+    nodePathLabel,
+} from './customTestModel';
+import { CUSTOM_VIEW_ID, CustomTestWebviewProvider } from './customTestWebview';
 
-// Tracks failed class names across runs for the "Re-run Failed" command
-let lastFailedClassNames: string[] = [];
-// Current set of Maven modules — updated on every refresh
+let outputChannel: vscode.OutputChannel;
 let currentModules: MavenModule[] = [];
-let activeFilterExpression: string | undefined;
-let _diagChannel: vscode.OutputChannel | undefined;
-// Cache of the last known SuiteResult per class name — used to compute full
-// aggregates after partial runs without losing results from other classes.
-// Key: suiteName (FQCN), Value: SuiteResult with merged test cases.
+let modulesWithClasses: ModuleClasses[] = [];
+let currentTree: CustomTreeSnapshot = emptyTree();
+let activeFilterExpression = '';
+let selectedNodeId: string | undefined;
+let running = false;
+
 const resultCache = new Map<string, SuiteResult>();
+const expandedIds = new Set<string>();
+const lastFailedClassNames = new Set<string>();
+const RESULT_CACHE_KEY = 'mavenTestExplorer.resultCache';
+const EXPANDED_IDS_KEY = 'mavenTestExplorer.customExpandedIds';
+const SELECTED_ID_KEY = 'mavenTestExplorer.customSelectedId';
+const FILTER_KEY = 'mavenTestExplorer.customFilter';
 
-/**
- * Updates the result cache with new SuiteResults.
- * For full-module runs, first evicts all suites belonging to that module.
- * For all runs, merges at method level — existing methods are updated in-place,
- * new methods are added, and methods not in the new result are preserved.
- * This ensures aggregate counts never grow beyond unique method count.
- */
-function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs: ReadonlySet<string>): void {
-    const log = (msg: string) => _diagChannel?.appendLine(`[Cache] ${msg}`);
-    const totalBefore = Array.from(resultCache.values()).reduce((s, r) => s + r.testCases.length, 0);
-    log(`updateResultCache — before: ${resultCache.size} suites, ${totalBefore} methods; incoming: ${newResults.length} suites; fullRunDirs: [${Array.from(fullRunModuleDirs).join(', ')}]`);
-
-    // For full runs: evict all cached suites under those module dirs
-    if (fullRunModuleDirs.size > 0) {
-        for (const [suiteName, suite] of resultCache) {
-            for (const dir of fullRunModuleDirs) {
-                if (suite.xmlPath.startsWith(dir + path.sep) || suite.xmlPath.startsWith(dir + '/')) {
-                    log(`  evict ${suiteName}`);
-                    resultCache.delete(suiteName);
-                    break;
-                }
-            }
-        }
-    }
-    // Merge at method level: update existing methods, add new ones, preserve untouched
-    for (const suite of newResults) {
-        const existing = resultCache.get(suite.suiteName);
-        if (!existing) {
-            log(`  NEW suite "${suite.suiteName}" (${suite.testCases.length} methods)`);
-            resultCache.set(suite.suiteName, suite);
-        } else {
-            const methodMap = new Map(existing.testCases.map(tc => [tc.methodName, tc]));
-            const before = methodMap.size;
-            for (const tc of suite.testCases) {
-                if (!methodMap.has(tc.methodName)) {
-                    log(`  NEW method "${tc.methodName}" added to "${suite.suiteName}"`);
-                }
-                methodMap.set(tc.methodName, tc);
-            }
-            const after = methodMap.size;
-            if (after !== before) {
-                log(`  WARN suite "${suite.suiteName}" grew ${before} → ${after}`);
-            }
-            resultCache.set(suite.suiteName, { ...suite, testCases: Array.from(methodMap.values()) });
-        }
-    }
-    const totalAfter = Array.from(resultCache.values()).reduce((s, r) => s + r.testCases.length, 0);
-    log(`updateResultCache — after: ${resultCache.size} suites, ${totalAfter} methods`);
-}
+let provider: CustomTestWebviewProvider;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
-    _diagChannel = outputChannel;
+    outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
     context.subscriptions.push(outputChannel);
+    outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
 
-    outputChannel.appendLine('[Extension] Maven Test Explorer Bridge activating...');
-
-    const controller = vscode.tests.createTestController(EXTENSION_ID, CONTROLLER_LABEL);
-    context.subscriptions.push(controller);
-
-    const treeBuilder = new TestTreeBuilder(controller);
-
-    // Initial discovery
-    currentModules = await discoverModules(outputChannel);
-    if (currentModules.length === 0) {
-        outputChannel.appendLine('[Extension] No Maven modules found. Extension idle.');
-        vscode.window.showInformationMessage('Maven Test Explorer: No pom.xml detected in workspace.');
-        return;
+    activeFilterExpression = context.workspaceState.get<string>(FILTER_KEY, '');
+    selectedNodeId = context.workspaceState.get<string>(SELECTED_ID_KEY);
+    for (const id of context.workspaceState.get<string[]>(EXPANDED_IDS_KEY, [])) {
+        expandedIds.add(id);
     }
 
-    await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
+    provider = new CustomTestWebviewProvider(context.extensionUri, {
+        refresh: () => refresh(context, true),
+        runAll: () => runAll(context),
+        rerunFailed: () => rerunFailed(context),
+        clearResults: () => clearResults(context, false),
+        clearResultsAndHistory: () => clearResults(context, true),
+        showHistory: () => showHistory(context),
+        applyFilter: (value) => applyFilter(context, value),
+        clearFilter: () => applyFilter(context, ''),
+        openNode: (id) => openNode(id),
+        runNode: (id) => runNode(context, id),
+        selectNode: (id) => selectNode(context, id),
+        setExpanded: (id, expanded) => setExpanded(context, id, expanded),
+        copy: (kind, id) => copyNode(kind, id),
+        attach: (kind, id) => attachNode(kind, id),
+    });
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(CUSTOM_VIEW_ID, provider));
 
-    // Auto-refresh when Java test files are added, removed, or renamed
+    registerCommands(context);
+    registerTagDocumentLinks(context);
+    registerJavaAutoRefresh(context);
+    registerReportWatcher(context);
+
+    currentModules = await discoverModules();
+    if (currentModules.length === 0) {
+        vscode.window.showInformationMessage('Maven Test Explorer: No pom.xml detected in workspace.');
+    }
+    await refresh(context, false);
+    outputChannel.appendLine('[Extension] Maven Test Explorer custom view activated.');
+}
+
+export function deactivate(): void {
+    // VS Code disposes subscriptions automatically.
+}
+
+async function refresh(context: vscode.ExtensionContext, showMessage: boolean): Promise<void> {
+    const settings = readSettings();
+    restoreResultCacheIfNeeded(context);
+    currentModules = await discoverModules();
+    modulesWithClasses = [];
+    for (const module of currentModules) {
+        const classes = await scanTestFiles(module.moduleDir, settings.testSourceGlobs);
+        modulesWithClasses.push({ module, classes });
+        outputChannel.appendLine(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
+    }
+    rebuildTree();
+    if (showMessage) {
+        vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
+    }
+}
+
+function rebuildTree(): void {
+    currentTree = buildCustomTree(modulesWithClasses, Array.from(resultCache.values()), activeFilterExpression);
+    if (!selectedNodeId || !currentTree.nodesById.has(selectedNodeId)) {
+        selectedNodeId = undefined;
+    }
+    provider?.updateState({
+        roots: currentTree.filteredRoots,
+        stats: currentTree.stats,
+        filterText: activeFilterExpression,
+        filterError: currentTree.filterError,
+        expandedIds: Array.from(expandedIds),
+        selectedId: selectedNodeId,
+        running,
+    });
+}
+
+async function runAll(context: vscode.ExtensionContext): Promise<void> {
+    await runTargets(context, currentModules.map((module) => ({ module, classNames: [] })), 'Run All');
+}
+
+async function runNode(context: vscode.ExtensionContext, id: string): Promise<void> {
+    const node = currentTree.nodesById.get(id);
+    if (!node) {
+        return;
+    }
+    const module = currentModules.find((item) => item.artifactId === node.moduleId);
+    if (!module) {
+        return;
+    }
+    const classNames = findRunnableClassTargets(node);
+    await runTargets(context, [{ module, classNames }], nodePathLabel(node));
+}
+
+async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
+    if (lastFailedClassNames.size === 0) {
+        vscode.window.showInformationMessage('Maven Test Explorer: No failed tests to re-run.');
+        return;
+    }
+    const moduleTargets = new Map<string, { module: MavenModule; classNames: string[] }>();
+    for (const className of lastFailedClassNames) {
+        const module = findModuleForClass(className);
+        if (!module) {
+            continue;
+        }
+        const entry = moduleTargets.get(module.artifactId) ?? { module, classNames: [] };
+        entry.classNames.push(simpleClassTarget(className));
+        moduleTargets.set(module.artifactId, entry);
+    }
+    await runTargets(context, Array.from(moduleTargets.values()), 'Re-run Failed');
+}
+
+async function runTargets(
+    context: vscode.ExtensionContext,
+    targets: readonly { module: MavenModule; classNames: readonly string[] }[],
+    historyLabel: string,
+): Promise<void> {
+    const settings = readSettings();
+    if (settings.showOutputChannel) {
+        outputChannel.show(true);
+    }
+    running = true;
+    rebuildTree();
+
+    const cancellationSource = new vscode.CancellationTokenSource();
+    const allResults: SuiteResult[] = [];
+    const fullRunModuleDirs = new Set<string>();
+
+    try {
+        for (const target of targets) {
+            if (settings.clearReportsBeforeRun) {
+                clearReportDirectories(target.module.moduleDir);
+                outputChannel.appendLine(`[Runner] Cleared reports in: ${target.module.moduleDir}`);
+            }
+
+            let args: string[];
+            if (target.classNames.length === 0) {
+                fullRunModuleDirs.add(target.module.moduleDir);
+                args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) });
+            } else if (historyLabel === 'Re-run Failed') {
+                args = buildRerunFailedArgs(
+                    { ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) },
+                    target.classNames,
+                );
+            } else {
+                args = buildRunClassArgs(
+                    { ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) },
+                    normalizeClassTargets(target.classNames).join(','),
+                );
+            }
+
+            const result = await runMaven(target.module.moduleDir, args, outputChannel, cancellationSource.token);
+            if (!result.cancelled) {
+                const suiteResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
+                allResults.push(...suiteResults);
+            }
+        }
+    } finally {
+        updateResultCache(allResults, fullRunModuleDirs);
+        updateFailedClasses(Array.from(resultCache.values()));
+        await saveResultCache(context);
+        if (settings.runHistoryEnabled) {
+            saveRunToHistory(context, allResults, historyLabel);
+        }
+        running = false;
+        rebuildTree();
+    }
+}
+
+function registerCommands(context: vscode.ExtensionContext): void {
+    context.subscriptions.push(
+        vscode.commands.registerCommand(CMD_REFRESH_TESTS, () => refresh(context, true)),
+        vscode.commands.registerCommand(CMD_RUN_ALL_TESTS, () => runAll(context)),
+        vscode.commands.registerCommand(CMD_RERUN_FAILED, () => rerunFailed(context)),
+        vscode.commands.registerCommand(CMD_CLEAN_REPORTS, async () => {
+            for (const module of currentModules) {
+                clearReportDirectories(module.moduleDir);
+            }
+            vscode.window.showInformationMessage('Maven Test Explorer: Report XML files cleaned.');
+        }),
+        vscode.commands.registerCommand(CMD_CLEAR_RESULTS, () => clearResults(context, false)),
+        vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, () => clearResults(context, true)),
+        vscode.commands.registerCommand(CMD_SHOW_HISTORY, () => showHistory(context)),
+        vscode.commands.registerCommand(CMD_APPLY_FILTER, async (value?: string) => {
+            const next = value ?? await vscode.window.showInputBox({
+                title: 'Maven Test Explorer Filter',
+                value: activeFilterExpression,
+                placeHolder: '@tag AND failed',
+            });
+            if (next !== undefined) {
+                await applyFilter(context, next);
+            }
+        }),
+        vscode.commands.registerCommand(CMD_CLEAR_FILTER, () => applyFilter(context, '')),
+        vscode.commands.registerCommand(CMD_COPY, () => copyNode('path')),
+        vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, () => copyNode('maven')),
+        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, () => copyNode('maven')),
+        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, () => copyNode('class')),
+        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, () => copyNode('method')),
+        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, () => copyNode('package')),
+        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, () => copyNode('file')),
+        vscode.commands.registerCommand(CMD_ATTACH_TO_COPILOT, () => attachNode('copilot')),
+        vscode.commands.registerCommand(CMD_ATTACH_TO_CLAUDE, () => attachNode('claude')),
+    );
+}
+
+async function clearResults(context: vscode.ExtensionContext, withHistory: boolean): Promise<void> {
+    resultCache.clear();
+    lastFailedClassNames.clear();
+    await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
+    if (withHistory) {
+        clearHistory(context);
+    }
+    rebuildTree();
+    vscode.window.showInformationMessage(withHistory
+        ? 'Maven Test Explorer: Results and history cleared.'
+        : 'Maven Test Explorer: Results cleared.');
+}
+
+async function showHistory(context: vscode.ExtensionContext): Promise<void> {
+    const history = loadHistory(context);
+    if (history.length === 0) {
+        vscode.window.showInformationMessage('Maven Test Explorer: No run history yet.');
+        return;
+    }
+    const selected = await vscode.window.showQuickPick(
+        history.map((entry) => ({ label: entry.label, description: entry.source, entry })),
+        { title: 'Maven Test Run History', placeHolder: 'Select a run to restore its results' },
+    );
+    if (!selected) {
+        return;
+    }
+    resultCache.clear();
+    updateResultCache(selected.entry.suiteResults, new Set());
+    updateFailedClasses(selected.entry.suiteResults);
+    await saveResultCache(context);
+    rebuildTree();
+}
+
+async function applyFilter(context: vscode.ExtensionContext, value: string): Promise<void> {
+    activeFilterExpression = value.trim();
+    await context.workspaceState.update(FILTER_KEY, activeFilterExpression);
+    rebuildTree();
+}
+
+async function openNode(id: string): Promise<void> {
+    const requested = currentTree.nodesById.get(id);
+    if (!requested) {
+        return;
+    }
+    const anchor = requested.isVirtual && requested.virtualParentId
+        ? currentTree.nodesById.get(requested.virtualParentId) ?? requested
+        : requested;
+    if (requested.isVirtual) {
+        vscode.window.showInformationMessage('Maven Test Explorer: Virtual test, opened parent method.');
+    }
+    if (!anchor.sourcePath) {
+        return;
+    }
+    const line = Math.max((anchor.line ?? 1) - 1, 0);
+    const uri = vscode.Uri.file(anchor.sourcePath);
+    const range = new vscode.Range(new vscode.Position(line, 0), new vscode.Position(line, 0));
+    const editor = await vscode.window.showTextDocument(uri, {
+        selection: range,
+        preserveFocus: false,
+        preview: true,
+    });
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+}
+
+async function selectNode(context: vscode.ExtensionContext, id: string): Promise<void> {
+    selectedNodeId = id;
+    await context.workspaceState.update(SELECTED_ID_KEY, id);
+    rebuildTree();
+}
+
+async function setExpanded(context: vscode.ExtensionContext, id: string, expanded: boolean): Promise<void> {
+    if (expanded) {
+        expandedIds.add(id);
+    } else {
+        expandedIds.delete(id);
+    }
+    await context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds));
+    rebuildTree();
+}
+
+async function copyNode(kind: string, id = selectedNodeId): Promise<void> {
+    const node = id ? currentTree.nodesById.get(id) : undefined;
+    if (!node) {
+        vscode.window.showInformationMessage('Maven Test Explorer: Select a test node first.');
+        return;
+    }
+    const text = await copyTextForNode(kind, node);
+    if (!text) {
+        return;
+    }
+    await vscode.env.clipboard.writeText(text);
+    vscode.window.showInformationMessage(`Copied: ${text}`);
+}
+
+async function copyTextForNode(kind: string, node: CustomTestNode): Promise<string | undefined> {
+    switch (kind) {
+        case 'maven':
+            return mavenCommandForNode(node);
+        case 'class':
+            return node.fqcn;
+        case 'method':
+            return node.methodName;
+        case 'package':
+            return node.packageName;
+        case 'file':
+            return node.sourcePath;
+        case 'path':
+        default:
+            return nodePathLabel(node);
+    }
+}
+
+async function mavenCommandForNode(node: CustomTestNode): Promise<string | undefined> {
+    const module = currentModules.find((item) => item.artifactId === node.moduleId);
+    if (!module) {
+        return undefined;
+    }
+    const settings = readSettings();
+    const executableSettings = { ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) };
+    const targets = findRunnableClassTargets(node);
+    const args = targets.length === 0
+        ? buildRunAllArgs(executableSettings)
+        : buildRunClassArgs(executableSettings, normalizeClassTargets(targets).join(','));
+    return args.join(' ');
+}
+
+async function attachNode(kind: 'copilot' | 'claude', id = selectedNodeId): Promise<void> {
+    const node = id ? currentTree.nodesById.get(id) : undefined;
+    if (!node?.sourcePath) {
+        vscode.window.showInformationMessage('Maven Test Explorer: Select a test node with source first.');
+        return;
+    }
+    await openNode(node.id);
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+        const line = Math.max((node.line ?? 1) - 1, 0);
+        const range = new vscode.Range(new vscode.Position(line, 0), new vscode.Position(line, 0));
+        editor.selection = new vscode.Selection(range.start, range.end);
+    }
+    if (kind === 'copilot') {
+        try { await vscode.commands.executeCommand('github.copilot.chat.attachSelection'); } catch { /* optional */ }
+        try { await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus'); } catch { /* optional */ }
+    } else {
+        try { await vscode.commands.executeCommand('claude-vscode.insertAtMention'); } catch { /* optional */ }
+        const suffix = node.line ? `#${node.line}` : '';
+        await vscode.env.clipboard.writeText(`${node.sourcePath}${suffix}`);
+        try { await vscode.commands.executeCommand('claude-vscode.focus'); } catch { /* optional */ }
+    }
+}
+
+function registerJavaAutoRefresh(context: vscode.ExtensionContext): void {
     let refreshDebounce: NodeJS.Timeout | undefined;
-    const scheduleAutoRefresh = () => {
-        const currentSettings = readSettings();
-        if (!currentSettings.autoRefreshOnSave) {
+    const schedule = () => {
+        const settings = readSettings();
+        if (!settings.autoRefreshOnSave) {
             return;
         }
         if (refreshDebounce) {
             clearTimeout(refreshDebounce);
         }
-        refreshDebounce = setTimeout(async () => {
-            outputChannel.appendLine('[Extension] Test file change detected — refreshing tree...');
-            currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-        }, currentSettings.autoRefreshDebounceMs);
+        refreshDebounce = setTimeout(() => {
+            outputChannel.appendLine('[Extension] Test file change detected, refreshing custom tree...');
+            void refresh(context, false);
+        }, settings.autoRefreshDebounceMs);
     };
-    const javaTestWatcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
-    javaTestWatcher.onDidCreate(scheduleAutoRefresh);
-    javaTestWatcher.onDidChange(scheduleAutoRefresh);
-    javaTestWatcher.onDidDelete(scheduleAutoRefresh);
-    context.subscriptions.push(javaTestWatcher);
-
-    // resolveHandler: called lazily when VS Code expands a subtree
-    controller.resolveHandler = async (item) => {
-        if (item === undefined) {
-            // Full refresh requested
-            currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-        }
-    };
-
-    // refreshHandler: triggers the reload button that VS Code shows in the Testing sidebar
-    controller.refreshHandler = async (_token) => {
-        outputChannel.appendLine('[Extension] Reloading test tree...');
-        currentModules = await discoverModules(outputChannel);
-        await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-    };
-
-    // Run profile — the only active profile for MVP
-    controller.createRunProfile(
-        RUN_PROFILE_LABEL,
-        vscode.TestRunProfileKind.Run,
-        async (request, token) => {
-            await runHandler(request, token, controller, treeBuilder, currentModules, outputChannel, context);
-        },
-        true,
-    );
-
-    // Start file watcher for external Maven runs
-    startReportWatcher(controller, treeBuilder, outputChannel, context);
-
-    // Register commands
-    registerCommands(context, controller, treeBuilder, outputChannel);
-    registerTagDocumentLinks(context);
-
-    outputChannel.appendLine('[Extension] Maven Test Explorer Bridge activated.');
+    const watcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
+    watcher.onDidCreate(schedule);
+    watcher.onDidChange(schedule);
+    watcher.onDidDelete(schedule);
+    context.subscriptions.push(watcher);
 }
 
-export function deactivate(): void {
-    // Subscriptions are disposed automatically by VS Code via context.subscriptions
-}
-
-// -------------------------------------------------------------------------
-// Run handler
-// -------------------------------------------------------------------------
-
-async function runHandler(
-    request: vscode.TestRunRequest,
-    token: vscode.CancellationToken,
-    controller: vscode.TestController,
-    treeBuilder: TestTreeBuilder,
-    modules: readonly MavenModule[],
-    outputChannel: vscode.OutputChannel,
-    context: vscode.ExtensionContext,
-): Promise<void> {
+function registerReportWatcher(context: vscode.ExtensionContext): void {
     const settings = readSettings();
-
-    if (settings.showOutputChannel) {
-        outputChannel.show(true);
+    if (!settings.watchReports) {
+        return;
     }
-
-    // Determine which modules and classes are targeted
-    const targetModules = resolveTargetModules(request, treeBuilder, modules);
-    const allSuiteResults: SuiteResult[] = [];
-    // Modules where ALL tests were run — their cache entries must be replaced, not merged
-    const fullRunModuleDirs = new Set<string>();
-
-    // Create the TestRun upfront so we can show enqueued/started states
-    const run = controller.createTestRun(request, 'Maven Surefire Results', true);
-
-    // Recursively collect leaf (method) items from a TestItem subtree
-    const collectLeaves = (item: vscode.TestItem): vscode.TestItem[] => {
-        if (item.children.size === 0) {
-            return [item];
+    const watcher = vscode.workspace.createFileSystemWatcher('**/target/{surefire-reports,failsafe-reports}/TEST-*.xml');
+    let timer: NodeJS.Timeout | undefined;
+    const schedule = () => {
+        if (timer) {
+            clearTimeout(timer);
         }
-        const leaves: vscode.TestItem[] = [];
-        item.children.forEach((child) => leaves.push(...collectLeaves(child)));
-        return leaves;
+        timer = setTimeout(async () => {
+            if (running) {
+                return;
+            }
+            outputChannel.appendLine('[Watcher] Report XML change detected, refreshing results...');
+            const allResults = currentModules.flatMap((module) => readAllReports(module.moduleDir, readSettings().reportGlobs));
+            updateResultCache(allResults, new Set());
+            updateFailedClasses(allResults);
+            await saveResultCache(context);
+            rebuildTree();
+        }, 500);
     };
-
-    // Enqueue everything that will run
-    const allLeaves = request.include
-        ? request.include.flatMap(collectLeaves)
-        : treeBuilder.getAllMethodItems();
-    for (const item of allLeaves) {
-        run.enqueued(item);
-    }
-
-    try {
-        for (const { module, classNames } of targetModules) {
-            if (token.isCancellationRequested) {
-                break;
-            }
-
-            // Mark this module's items as started (spinning indicator)
-            const moduleLeaves = request.include
-                ? request.include
-                    .filter((item) => item.id === module.artifactId || item.id.startsWith(`${module.artifactId}/`))
-                    .flatMap(collectLeaves)
-                : treeBuilder.getMethodItemsForModule(module.artifactId);
-            outputChannel.appendLine(`[Runner] Pre-starting ${moduleLeaves.length} static items`);
-            for (const item of moduleLeaves) {
-                run.started(item);
-            }
-
-            if (settings.clearReportsBeforeRun) {
-                clearReportDirectories(module.moduleDir);
-                outputChannel.appendLine(`[Runner] Cleared reports in: ${module.moduleDir}`);
-            }
-
-            let args: string[];
-            if (classNames.length === 0) {
-                fullRunModuleDirs.add(module.moduleDir);
-                args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
-            } else {
-                // Group method-level targets by class: "ClassName#method1+method2"
-                // Plain class names (no #) are passed as-is.
-                const classMethodMap = new Map<string, string[]>();
-                for (const segment of classNames) {
-                    if (segment.includes('#')) {
-                        const [cls, method] = segment.split('#', 2);
-                        if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
-                        classMethodMap.get(cls)!.push(method);
-                    } else {
-                        // Class-level target — no method filter
-                        if (!classMethodMap.has(segment)) { classMethodMap.set(segment, []); }
-                    }
-                }
-                const testParam = Array.from(classMethodMap.entries())
-                    .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                    .join(',');
-                args = buildRunClassArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, testParam);
-            }
-
-            // Start watching report dirs — publishes results in real time as XMLs appear
-            const { stop: stopWatch, claimedXmlPaths } = watchReportDirsForRun(
-                module.moduleDir, settings.reportGlobs, run, treeBuilder, outputChannel,
-            );
-
-            const result = await runMaven(module.moduleDir, args, outputChannel, token, moduleLeaves.length);
-
-            // Stop the watcher; any in-flight 150ms parse timers become irrelevant — we
-            // republish everything below from readAllReports as the single source of truth.
-            stopWatch();
-
-            if (!result.cancelled) {
-                // Republish ALL report files to the run.
-                const allAfter = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-                const resolvedIds = new Set<string>();
-                // Shared map across all XML files: prevents double-counting parent-class
-                // tests that Surefire duplicates into each nested-class XML file.
-                const sharedInvocationCounts = new Map<string, number>();
-                let totalTcCount = 0;
-                let totalPassed = 0, totalFailed = 0, totalError = 0, totalSkipped = 0;
-                for (const r of allAfter) {
-                    totalTcCount += r.testCases.length;
-                    for (const tc of r.testCases) {
-                        switch (tc.status) {
-                            case 'passed':  totalPassed++;  break;
-                            case 'failed':  totalFailed++;  break;
-                            case 'error':   totalError++;   break;
-                            case 'skipped': totalSkipped++; break;
-                        }
-                    }
-                    const ids = publishResults(undefined, treeBuilder, [r], outputChannel, undefined, false, run, sharedInvocationCounts);
-                    ids.forEach((id) => resolvedIds.add(id));
-                }
-                outputChannel.appendLine(`[Runner] Total testcases in XML: ${totalTcCount}, resolved items: ${resolvedIds.size}`);
-                const counted = totalPassed + totalFailed + totalError;
-                const pct = counted > 0 ? ((totalPassed / counted) * 100).toFixed(1) : '0.0';
-                const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
-                const summary = `\r\n✔ ${totalPassed}  ✘ ${totalFailed + totalError}  ⊘ ${totalSkipped}  │  ${totalPassed}/${counted} passed` +
-                    (totalSkipped > 0 ? `  (${totalSkipped} skipped not counted)` : '') + `\r\n`;
-                run.appendOutput(summary);
-                outputChannel.appendLine(`[Results] Summary: ${totalPassed}/${counted} tests passed (${pct}%${skippedNote})`);
-                registerUiRunXmlPaths(allAfter.map((r) => r.xmlPath));
-                lastFailedClassNames = collectFailedClasses(allAfter);
-                allSuiteResults.push(...allAfter);
-            } else {
-                // Cancelled — suppress external watcher for anything seen so far
-                registerUiRunXmlPaths(Array.from(claimedXmlPaths));
-            }
-        }
-    } finally {
-        updateResultCache(allSuiteResults, fullRunModuleDirs);
-        await saveResultCache(context, resultCache, outputChannel);
-        treeBuilder.updateAggregates(Array.from(resultCache.values()));
-        run.end();
-        clearUiRunXmlPaths();
-    }
-
-    if (settings.runHistoryEnabled) {
-        saveRunToHistory(context, allSuiteResults, 'UI Run');
-    }
-}
-
-// -------------------------------------------------------------------------
-// Commands
-// -------------------------------------------------------------------------
-
-/** Opens a TestItem's source file in a preview editor and resolves its line range.
- *  For method items the range comes directly from item.range.
- *  For class items (no range set) the range is looked up via DocumentSymbolProvider. */
-async function openItemInEditor(item: vscode.TestItem): Promise<{ editor: vscode.TextEditor; range: vscode.Range | undefined }> {
-    const editor = await vscode.window.showTextDocument(item.uri!, {
-        selection: item.range,
-        preserveFocus: false,
-        preview: true,
-    });
-    let range = item.range;
-    if (!range) {
-        const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-            'vscode.executeDocumentSymbolProvider', item.uri!,
-        );
-        if (symbols) {
-            const parts = item.id.split('/');
-            const simpleName = parts[parts.length - 1].split('$').pop() ?? '';
-            const find = (list: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
-                for (const s of list) {
-                    if (s.kind === vscode.SymbolKind.Class && s.name === simpleName) { return s; }
-                    const found = find(s.children);
-                    if (found) { return found; }
-                }
-                return undefined;
-            };
-            range = find(symbols)?.range;
-        }
-    }
-    return { editor, range };
-}
-
-function registerCommands(
-    context: vscode.ExtensionContext,
-    controller: vscode.TestController,
-    treeBuilder: TestTreeBuilder,
-    outputChannel: vscode.OutputChannel,
-): void {
-    context.subscriptions.push(
-        vscode.commands.registerCommand(CMD_REFRESH_TESTS, async () => {
-            outputChannel.appendLine('[Command] Refreshing test tree...');
-            currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-            vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
-        }),
-
-        vscode.commands.registerCommand(CMD_RUN_ALL_TESTS, async () => {
-            const settings = readSettings();
-            if (settings.showOutputChannel) {
-                outputChannel.show(true);
-            }
-            const token = new vscode.CancellationTokenSource().token;
-            const allRunAllResults: SuiteResult[] = [];
-            for (const module of currentModules) {
-                if (settings.clearReportsBeforeRun) {
-                    clearReportDirectories(module.moduleDir);
-                }
-                const args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) });
-                const result = await runMaven(module.moduleDir, args, outputChannel, token);
-                if (!result.cancelled) {
-                    const suiteResults = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-                    publishResults(controller, treeBuilder, suiteResults, outputChannel, undefined);
-                    lastFailedClassNames = collectFailedClasses(suiteResults);
-                    allRunAllResults.push(...suiteResults);
-                }
-            }
-            if (settings.runHistoryEnabled) {
-                saveRunToHistory(context, allRunAllResults, 'Run All');
-            }
-        }),
-
-        vscode.commands.registerCommand(CMD_RERUN_FAILED, async () => {
-            if (lastFailedClassNames.length === 0) {
-                vscode.window.showInformationMessage('Maven Test Explorer: No failed tests to re-run.');
-                return;
-            }
-            const settings = readSettings();
-            if (settings.showOutputChannel) {
-                outputChannel.show(true);
-            }
-            const token = new vscode.CancellationTokenSource().token;
-            const allRerunResults: SuiteResult[] = [];
-            for (const module of currentModules) {
-                const args = buildRerunFailedArgs({ ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) }, lastFailedClassNames);
-                const result = await runMaven(module.moduleDir, args, outputChannel, token);
-                if (!result.cancelled) {
-                    const suiteResults = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-                    publishResults(controller, treeBuilder, suiteResults, outputChannel, undefined);
-                    lastFailedClassNames = collectFailedClasses(suiteResults);
-                    allRerunResults.push(...suiteResults);
-                }
-            }
-            if (settings.runHistoryEnabled) {
-                saveRunToHistory(context, allRerunResults, 'Rerun Failed');
-            }
-        }),
-
-        vscode.commands.registerCommand(CMD_CLEAN_REPORTS, () => {
-            for (const module of currentModules) {
-                clearReportDirectories(module.moduleDir);
-                outputChannel.appendLine(`[Command] Cleaned reports: ${module.moduleDir}`);
-            }
-            vscode.window.showInformationMessage('Maven Test Explorer: Test reports cleaned.');
-        }),
-
-        vscode.commands.registerCommand(CMD_APPLY_FILTER, async (expressionArg?: string) => {
-            const expression = typeof expressionArg === 'string'
-                ? expressionArg
-                : await vscode.window.showInputBox({
-                    title: 'Maven Test Filter Expression',
-                    prompt: 'Supports AND/&&, OR/|| and parentheses. Tags like @tag and @mavenTestExplorer:status.failed also work in the default Testing sidebar input.',
-                    placeHolder: 'text, @tag, @mavenTestExplorer:status.failed, AND/&&, OR/||, parentheses',
-                    value: activeFilterExpression,
-                });
-            if (expression === undefined) {
-                return;
-            }
-            const trimmed = expression.trim();
-            if (trimmed.length === 0) {
-                activeFilterExpression = undefined;
-            } else {
-                try {
-                    parseFilterExpression(trimmed);
-                    activeFilterExpression = trimmed;
-                } catch {
-                    vscode.window.showErrorMessage('Maven Test Explorer: Invalid filter expression.');
-                    return;
-                }
-            }
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-            const message = activeFilterExpression
-                ? `Maven Test Explorer: Filter applied: ${activeFilterExpression}`
-                : 'Maven Test Explorer: Filter cleared.';
-            vscode.window.showInformationMessage(message);
-        }),
-
-        vscode.commands.registerCommand(CMD_CLEAR_FILTER, async () => {
-            activeFilterExpression = undefined;
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context);
-            vscode.window.showInformationMessage('Maven Test Explorer: Filter cleared.');
-        }),
-
-        vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, async () => {
-            const settings = readSettings();
-            const resolvedExecutable = currentModules.length > 0
-                ? resolveExecutable(settings, currentModules[0].moduleDir)
-                : settings.mavenExecutable;
-            const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
-            const args = lastFailedClassNames.length > 0
-                ? buildRerunFailedArgs(effectiveSettings, lastFailedClassNames)
-                : buildRunAllArgs(effectiveSettings);
-            const command = args.join(' ');
-            await vscode.env.clipboard.writeText(command);
-            vscode.window.showInformationMessage(`Copied: ${command}`);
-        }),
-
-        // Context menu: "Copy..." — opens QuickPick, receives selected items directly (bypasses submenu limitation)
-        vscode.commands.registerCommand(CMD_COPY, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items: vscode.TestItem[] = [item, ...rest];
-            const hasMethods = items.some((i) => i.id.includes('#'));
-            const hasSlash = items.some((i) => i.id.includes('/'));
-            const hasClass = items.some((i) => i.id.split('/').length >= 3);
-            type CopyOption = vscode.QuickPickItem & { action: string };
-            const options: CopyOption[] = [
-                { label: '$(terminal) Copy Maven Command', action: 'maven' },
-                ...(hasSlash ? [{ label: '$(symbol-namespace) Copy Package Name', action: 'package' }] : []),
-                ...(hasClass ? [{ label: '$(symbol-class) Copy Class Name (FQCN)', action: 'class' }] : []),
-                ...(hasSlash ? [{ label: '$(symbol-reference) Copy Full Path', action: 'fullpath' }] : []),
-                ...(hasMethods ? [{ label: '$(symbol-method) Copy Method Name', action: 'method' }] : []),
-            ];
-            const picked = await vscode.window.showQuickPick(options, {
-                placeHolder: items.length > 1 ? `Copy — ${items.length} items selected` : `Copy — ${item.label}`,
-            }) as CopyOption | undefined;
-            if (!picked) { return; }
-
-            if (picked.action === 'maven') {
-                const settings = readSettings();
-                const moduleMap = new Map<string, { module: MavenModule; classNames: string[] }>();
-                for (const it of items) {
-                    const parts = it.id.split('/');
-                    const mod = currentModules.find((m) => m.artifactId === parts[0]);
-                    if (!mod) { continue; }
-                    if (!moduleMap.has(parts[0])) { moduleMap.set(parts[0], { module: mod, classNames: [] }); }
-                    const entry = moduleMap.get(parts[0])!;
-                    if (parts.length === 2) {
-                        treeBuilder.getFqcnsForPackage(parts[0], parts[1]).forEach((f) => entry.classNames.push(f.substring(f.lastIndexOf('.') + 1)));
-                    } else if (parts.length >= 3) {
-                        entry.classNames.push(parts[2]);
-                    }
-                }
-                const commands: string[] = [];
-                for (const { module: mod, classNames } of moduleMap.values()) {
-                    const effectiveSettings = { ...settings, mavenExecutable: resolveExecutable(settings, mod.moduleDir) };
-                    let args: string[];
-                    if (classNames.length === 0) {
-                        args = buildRunAllArgs(effectiveSettings);
-                    } else {
-                        const classMethodMap = new Map<string, string[]>();
-                        for (const seg of classNames) {
-                            if (seg.includes('#')) {
-                                const [cls, method] = seg.split('#', 2);
-                                if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
-                                // Lifecycle annotations (@BeforeAll etc.) are not runnable methods —
-                                // run the whole class instead.
-                                if (!method.startsWith('@')) {
-                                    classMethodMap.get(cls)!.push(method);
-                                }
-                            } else {
-                                if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
-                            }
-                        }
-                        const testParam = Array.from(classMethodMap.entries())
-                            .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                            .join(',');
-                        args = buildRunClassArgs(effectiveSettings, testParam);
-                    }
-                    commands.push(args.join(' '));
-                }
-                const text = commands.join('\n');
-                await vscode.env.clipboard.writeText(text);
-                vscode.window.showInformationMessage(commands.length > 1 ? `Copied ${commands.length} commands` : `Copied: ${text}`);
-
-            } else if (picked.action === 'package') {
-                const packages = [...new Set(items.map((it) => { const p = it.id.split('/'); return p.length >= 2 ? p[1] : p[0]; }))];
-                const text = packages.join('\n');
-                await vscode.env.clipboard.writeText(text);
-                vscode.window.showInformationMessage(packages.length > 1 ? `Copied ${packages.length} package names` : `Copied: ${text}`);
-
-            } else if (picked.action === 'class') {
-                const fqcns = [...new Set(items.map((it) => {
-                    const p = it.id.split('/');
-                    if (p.length >= 3) { return p[1] ? `${p[1]}.${p[2].split('#')[0]}` : p[2].split('#')[0]; }
-                    if (p.length === 2) { return p[1]; }
-                    return null;
-                }).filter(Boolean) as string[])];
-                if (fqcns.length === 0) { return; }
-                const text = fqcns.join('\n');
-                await vscode.env.clipboard.writeText(text);
-                vscode.window.showInformationMessage(fqcns.length > 1 ? `Copied ${fqcns.length} class names` : `Copied: ${text}`);
-
-            } else if (picked.action === 'fullpath') {
-                const paths = items.map((it) => {
-                    const p = it.id.split('/');
-                    if (p.length === 1) { return p[0]; }
-                    if (p.length === 2) { return p[1]; }
-                    return p[1] ? `${p[1]}.${p[2]}` : p[2];
-                });
-                const text = paths.join('\n');
-                await vscode.env.clipboard.writeText(text);
-                vscode.window.showInformationMessage(paths.length > 1 ? `Copied ${paths.length} paths` : `Copied: ${text}`);
-
-            } else if (picked.action === 'method') {
-                const methods = [...new Set(items.map((it) => {
-                    const p = it.id.split('/');
-                    if (p.length < 3) { return null; }
-                    const h = p[2].indexOf('#');
-                    return h >= 0 ? p[2].substring(h + 1) : null;
-                }).filter(Boolean) as string[])];
-                if (methods.length === 0) { return; }
-                const text = methods.join('\n');
-                await vscode.env.clipboard.writeText(text);
-                vscode.window.showInformationMessage(methods.length > 1 ? `Copied ${methods.length} method names` : `Copied: ${text}`);
-            }
-        }),
-
-        // Context menu: Copy Maven command for a specific test item (multi-select aware)
-        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items = selected && selected.length > 0 ? selected : [item];
-            const settings = readSettings();
-            // Group by module
-            const moduleMap = new Map<string, { module: MavenModule; classNames: string[] }>();
-            for (const it of items) {
-                const parts = it.id.split('/');
-                const moduleArtifactId = parts[0];
-                const mod = currentModules.find((m) => m.artifactId === moduleArtifactId);
-                if (!mod) { continue; }
-                if (!moduleMap.has(moduleArtifactId)) { moduleMap.set(moduleArtifactId, { module: mod, classNames: [] }); }
-                const entry = moduleMap.get(moduleArtifactId)!;
-                if (parts.length === 2) {
-                    const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, parts[1]);
-                    fqcns.forEach((f) => entry.classNames.push(f.substring(f.lastIndexOf('.') + 1)));
-                } else if (parts.length >= 3) {
-                    entry.classNames.push(parts[2]);
-                }
-            }
-            const commands: string[] = [];
-            for (const { module: mod, classNames } of moduleMap.values()) {
-                const resolvedExecutable = resolveExecutable(settings, mod.moduleDir);
-                const effectiveSettings = { ...settings, mavenExecutable: resolvedExecutable };
-                let args: string[];
-                if (classNames.length === 0) {
-                    args = buildRunAllArgs(effectiveSettings);
-                } else {
-                    // Group methods by class
-                    const classMethodMap = new Map<string, string[]>();
-                    for (const seg of classNames) {
-                        if (seg.includes('#')) {
-                            const [cls, method] = seg.split('#', 2);
-                            if (!classMethodMap.has(cls)) { classMethodMap.set(cls, []); }
-                            // Lifecycle annotations (@BeforeAll etc.) are not runnable methods —
-                            // run the whole class instead.
-                            if (!method.startsWith('@')) {
-                                classMethodMap.get(cls)!.push(method);
-                            }
-                        } else {
-                            if (!classMethodMap.has(seg)) { classMethodMap.set(seg, []); }
-                        }
-                    }
-                    const testParam = Array.from(classMethodMap.entries())
-                        .map(([cls, methods]) => methods.length > 0 ? `${cls}#${methods.join('+')}` : cls)
-                        .join(',');
-                    args = buildRunClassArgs(effectiveSettings, testParam);
-                }
-                commands.push(args.join(' '));
-            }
-            const command = commands.join('\n');
-            await vscode.env.clipboard.writeText(command);
-            vscode.window.showInformationMessage(items.length > 1 ? `Copied ${items.length} commands` : `Copied: ${command}`);
-        }),
-
-        // Context menu: Copy class name (FQCN) — multi-select aware
-        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items = selected && selected.length > 0 ? selected : [item];
-            const fqcns = [...new Set(items.map((it) => {
-                const parts = it.id.split('/');
-                if (parts.length >= 3) {
-                    const pkg = parts[1]; const cls = parts[2].split('#')[0];
-                    return pkg ? `${pkg}.${cls}` : cls;
-                } else if (parts.length === 2) { return parts[1]; }
-                return null;
-            }).filter(Boolean) as string[])];
-            if (fqcns.length === 0) { return; }
-            const text = fqcns.join('\n');
-            await vscode.env.clipboard.writeText(text);
-            vscode.window.showInformationMessage(fqcns.length > 1 ? `Copied ${fqcns.length} class names` : `Copied: ${text}`);
-        }),
-
-        // Context menu: Copy method name only — multi-select aware
-        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items = selected && selected.length > 0 ? selected : [item];
-            const methods = [...new Set(items.map((it) => {
-                const parts = it.id.split('/');
-                if (parts.length < 3) { return null; }
-                const hashIdx = parts[2].indexOf('#');
-                return hashIdx >= 0 ? parts[2].substring(hashIdx + 1) : null;
-            }).filter(Boolean) as string[])];
-            if (methods.length === 0) { return; }
-            const text = methods.join('\n');
-            await vscode.env.clipboard.writeText(text);
-            vscode.window.showInformationMessage(methods.length > 1 ? `Copied ${methods.length} method names` : `Copied: ${text}`);
-        }),
-
-        // Context menu: Copy package name — multi-select aware
-        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items = selected && selected.length > 0 ? selected : [item];
-            const packages = [...new Set(items.map((it) => {
-                const parts = it.id.split('/');
-                return parts.length >= 2 ? parts[1] : parts[0];
-            }))];
-            const text = packages.join('\n');
-            await vscode.env.clipboard.writeText(text);
-            vscode.window.showInformationMessage(packages.length > 1 ? `Copied ${packages.length} package names` : `Copied: ${text}`);
-        }),
-
-        // Context menu: Copy full path — multi-select aware
-        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, async (item: vscode.TestItem, selected?: readonly vscode.TestItem[]) => {
-            if (!item) { return; }
-            const items = selected && selected.length > 0 ? selected : [item];
-            const paths = items.map((it) => {
-                const parts = it.id.split('/');
-                if (parts.length === 1) { return parts[0]; }
-                if (parts.length === 2) { return parts[1]; }
-                const pkg = parts[1]; const classAndMethod = parts[2];
-                return pkg ? `${pkg}.${classAndMethod}` : classAndMethod;
-            });
-            const text = paths.join('\n');
-            await vscode.env.clipboard.writeText(text);
-            vscode.window.showInformationMessage(paths.length > 1 ? `Copied ${paths.length} paths` : `Copied: ${text}`);
-        }),
-
-        vscode.commands.registerCommand(CMD_CLEAR_RESULTS, async () => {
-            outputChannel.appendLine('[Command] Clearing test results...');
-            resultCache.clear();
-            await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
-            currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context, false);
-            await vscode.commands.executeCommand('testing.clearTestResults');
-            vscode.window.showInformationMessage('Maven Test Explorer: Results cleared.');
-        }),
-
-        vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, async () => {
-            outputChannel.appendLine('[Command] Clearing test results and history...');
-            resultCache.clear();
-            await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
-            clearHistory(context);
-            currentModules = await discoverModules(outputChannel);
-            await buildTree(controller, treeBuilder, currentModules, outputChannel, context, false);
-            await vscode.commands.executeCommand('testing.clearTestResults');
-            vscode.window.showInformationMessage('Maven Test Explorer: Results and history cleared.');
-        }),
-
-        vscode.commands.registerCommand(CMD_SHOW_HISTORY, async () => {
-            const history = loadHistory(context);
-            if (history.length === 0) {
-                vscode.window.showInformationMessage('Maven Test Explorer: No run history yet.');
-                return;
-            }
-
-            const items = history.map((entry) => ({
-                label: entry.label,
-                description: entry.source,
-                entry,
-            }));
-
-            const selected = await vscode.window.showQuickPick(items, {
-                title: 'Maven Test Run History',
-                placeHolder: 'Select a run to restore its results in the Testing panel',
-                canPickMany: false,
-            });
-
-            if (selected) {
-                outputChannel.appendLine(
-                    `[History] Restoring run: ${selected.entry.label}`,
-                );
-                treeBuilder.resetAllResults();
-                await vscode.commands.executeCommand('testing.clearTestResults');
-                publishResults(
-                    controller,
-                    treeBuilder,
-                    selected.entry.suiteResults,
-                    outputChannel,
-                    undefined,
-                    true,
-                );
-            }
-        }),
-
-        // Context menu: "Attach to Copilot Chat" — opens source, selects range, attaches, closes preview
-        vscode.commands.registerCommand(CMD_ATTACH_TO_COPILOT, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
-            if (!item?.uri) { return; }
-            for (const it of [item, ...rest].filter((i) => i?.uri)) {
-                const { editor, range } = await openItemInEditor(it);
-                if (range) {
-                    editor.selection = new vscode.Selection(range.start, range.end);
-                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-                }
-                try { await vscode.commands.executeCommand('github.copilot.chat.attachSelection'); } catch { /* not installed */ }
-                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-            }
-            try { await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus'); } catch { /* not installed */ }
-        }),
-
-        // Context menu: "Attach to Claude" — builds file#startLine-endLine path, opens Claude, inserts reference
-        vscode.commands.registerCommand(CMD_ATTACH_TO_CLAUDE, async (item: vscode.TestItem, ...rest: vscode.TestItem[]) => {
-            if (!item?.uri) { return; }
-            for (const it of [item, ...rest].filter((i) => i?.uri)) {
-                const { editor, range } = await openItemInEditor(it);
-                if (range) {
-                    editor.selection = new vscode.Selection(range.start, range.end);
-                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-                }
-                // Try Claude's insertAtMention with active selection
-                try { await vscode.commands.executeCommand('claude-vscode.insertAtMention'); } catch { /* not installed */ }
-                // Also build path string for manual paste fallback
-                if (range) {
-                    const startLine = range.start.line + 1;
-                    const endLine = range.end.line + 1;
-                    const lineFragment = startLine === endLine ? `#${startLine}` : `#${startLine}-${endLine}`;
-                    const pathStr = it.uri!.fsPath + lineFragment;
-                    await vscode.env.clipboard.writeText(pathStr);
-                }
-                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-            }
-            try { await vscode.commands.executeCommand('claude-vscode.focus'); } catch { /* not installed */ }
-        }),
-    );
+    watcher.onDidCreate(schedule);
+    watcher.onDidChange(schedule);
+    watcher.onDidDelete(schedule);
+    context.subscriptions.push(watcher);
 }
 
 function registerTagDocumentLinks(context: vscode.ExtensionContext): void {
@@ -838,33 +479,26 @@ function registerTagDocumentLinks(context: vscode.ExtensionContext): void {
                 provideDocumentLinks(document): vscode.DocumentLink[] {
                     const links: vscode.DocumentLink[] = [];
                     const tagPattern = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
-
                     for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
                         const line = document.lineAt(lineIndex);
                         tagPattern.lastIndex = 0;
-
                         let match: RegExpExecArray | null;
                         while ((match = tagPattern.exec(line.text)) !== null) {
                             const tagName = match[1].trim();
                             if (!tagName) {
                                 continue;
                             }
-
                             const tagStart = line.text.indexOf(match[1], match.index);
                             const range = new vscode.Range(
                                 new vscode.Position(lineIndex, tagStart),
                                 new vscode.Position(lineIndex, tagStart + match[1].length),
                             );
                             const args = encodeURIComponent(JSON.stringify([`@${tagName}`]));
-                            const link = new vscode.DocumentLink(
-                                range,
-                                vscode.Uri.parse(`command:${CMD_APPLY_FILTER}?${args}`),
-                            );
+                            const link = new vscode.DocumentLink(range, vscode.Uri.parse(`command:${CMD_APPLY_FILTER}?${args}`));
                             link.tooltip = `Filter Maven Test Explorer by @${tagName}`;
                             links.push(link);
                         }
                     }
-
                     return links;
                 },
             },
@@ -872,169 +506,39 @@ function registerTagDocumentLinks(context: vscode.ExtensionContext): void {
     );
 }
 
-// -------------------------------------------------------------------------
-// Private helpers
-// -------------------------------------------------------------------------
-
-async function discoverModules(outputChannel: vscode.OutputChannel): Promise<MavenModule[]> {
+async function discoverModules(): Promise<MavenModule[]> {
     const folders = vscode.workspace.workspaceFolders ?? [];
-    const allModules: MavenModule[] = [];
-
+    const modules: MavenModule[] = [];
     for (const folder of folders) {
-        const found = await findMavenModules(folder);
-        allModules.push(...found);
+        modules.push(...await findMavenModules(folder));
     }
-
-    outputChannel.appendLine(`[Discovery] Found ${allModules.length} Maven module(s)`);
-    return allModules;
+    outputChannel.appendLine(`[Discovery] Found ${modules.length} Maven module(s)`);
+    return modules;
 }
 
-async function buildTree(
-    controller: vscode.TestController,
-    treeBuilder: TestTreeBuilder,
-    modules: readonly MavenModule[],
-    outputChannel: vscode.OutputChannel,
-    context: vscode.ExtensionContext,
-    restoreResults = true,
-): Promise<void> {
-    const { testSourceGlobs } = readSettings();
-    const modulesWithClasses: Array<{ module: MavenModule; classes: Awaited<ReturnType<typeof scanTestFiles>> }> = [];
-
-    if (restoreResults) {
-        restoreResultCacheIfNeeded(context, modules, outputChannel);
-    }
-
-    const parsedFilter = activeFilterExpression
-        ? parseFilterExpression(activeFilterExpression)
-        : undefined;
-
-    for (const module of modules) {
-        let classes = await scanTestFiles(module.moduleDir, testSourceGlobs);
-        if (parsedFilter) {
-            classes = filterClassesByExpression(classes, parsedFilter, Array.from(resultCache.values()));
+function readAllReports(moduleDir: string, reportGlobs: readonly string[]): SuiteResult[] {
+    const results: SuiteResult[] = [];
+    for (const dir of resolveReportDirs(moduleDir, reportGlobs)) {
+        let files: string[];
+        try {
+            files = fs.readdirSync(dir);
+        } catch {
+            continue;
         }
-        modulesWithClasses.push({ module, classes });
-        outputChannel.appendLine(
-            `[Discovery] ${module.artifactId}: ${classes.length} test class(es)`,
-        );
-    }
-
-    treeBuilder.buildTree(modulesWithClasses);
-
-    if (!restoreResults) {
-        return;
-    }
-
-    // Replay cached results into a persistent TestRun to restore icons
-    if (resultCache.size > 0) {
-        const restoreRun = controller.createTestRun(new vscode.TestRunRequest(), 'Restored Results', true);
-        publishResults(undefined, treeBuilder, Array.from(resultCache.values()), outputChannel, undefined, false, restoreRun);
-        restoreRun.end();
-    }
-
-    treeBuilder.updateAggregates(Array.from(resultCache.values()));
-}
-
-function restoreResultCacheIfNeeded(
-    context: vscode.ExtensionContext,
-    modules: readonly MavenModule[],
-    outputChannel: vscode.OutputChannel,
-): void {
-    if (resultCache.size > 0) {
-        return;
-    }
-
-    const persisted = loadResultCache(context, outputChannel);
-    if (persisted.size > 0) {
-        for (const [k, v] of persisted) { resultCache.set(k, v); }
-        outputChannel.appendLine(`[Extension] Restored ${resultCache.size} cached result(s) from workspace state`);
-        return;
-    }
-
-    const settings = readSettings();
-    for (const module of modules) {
-        const existing = readAllReports(module.moduleDir, settings.reportGlobs, outputChannel);
-        updateResultCache(existing, new Set());
-    }
-}
-
-/**
- * Watches the module directory recursively during a Maven run.
- * Publishes results to the open TestRun as soon as each TEST-*.xml file appears.
- * Using recursive watch on moduleDir survives Maven clean deleting/recreating target/.
- * Returns a cleanup function and the set of XML paths claimed by this watcher.
- */
-function watchReportDirsForRun(
-    moduleDir: string,
-    reportGlobs: readonly string[],
-    run: vscode.TestRun,
-    treeBuilder: TestTreeBuilder,
-    outputChannel: vscode.OutputChannel,
-): { stop: () => void; claimedXmlPaths: Set<string> } {
-    const seenFiles = new Set<string>();
-    const reportDirs = resolveReportDirs(moduleDir, reportGlobs);
-
-    // Normalise to forward-slash relative paths for comparison
-    const isInReportDir = (absolutePath: string): boolean => {
-        for (const dir of reportDirs) {
-            if (absolutePath.startsWith(dir + path.sep) || absolutePath.startsWith(dir + '/')) {
-                return true;
+        for (const file of files) {
+            if (!file.startsWith('TEST-') || !file.endsWith('.xml')) {
+                continue;
+            }
+            const result = parseReportFile(path.join(dir, file));
+            if (result) {
+                results.push(result);
             }
         }
-        return false;
-    };
-
-    let watcher: fs.FSWatcher | undefined;
-    const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
-    try {
-        watcher = fs.watch(moduleDir, { recursive: true }, (_eventType, filename) => {
-            if (!filename) {
-                return;
-            }
-            const basename = path.basename(filename);
-            if (!basename.startsWith('TEST-') || !basename.endsWith('.xml')) {
-                return;
-            }
-            const xmlPath = path.join(moduleDir, filename);
-            if (seenFiles.has(xmlPath)) {
-                return;
-            }
-            if (!isInReportDir(xmlPath)) {
-                return;
-            }
-            seenFiles.add(xmlPath);
-            // Register immediately so the external FileSystemWatcher's debounce
-            // finds this path already excluded when it fires ~500ms later.
-            registerUiRunXmlPaths([xmlPath]);
-            // Small delay — surefire may still be writing the file.
-            // Real-time preview only; the final authoritative publish happens via
-            // readAllReports after Maven exits, so no need to track collectedResults.
-            const timer = setTimeout(() => {
-                pendingTimers.delete(timer);
-                const result = parseReportFile(xmlPath);
-                if (result) {
-                    publishResults(undefined, treeBuilder, [result], outputChannel, undefined, false, run);
-                }
-            }, 150);
-            pendingTimers.add(timer);
-        });
-    } catch {
-        outputChannel.appendLine(`[Runner] Cannot watch module dir: ${moduleDir}`);
     }
-
-    return {
-        stop: () => {
-            watcher?.close();
-            // Cancel pending parse timers so they don't fire after readAllReports
-            // republishes everything — prevents double-publishing the same files.
-            for (const t of pendingTimers) { clearTimeout(t); }
-            pendingTimers.clear();
-        },
-        claimedXmlPaths: seenFiles,
-    };
+    outputChannel.appendLine(`[Runner] Parsed ${results.length} XML report file(s)`);
+    return results;
 }
 
-/** Extracts concrete report directory paths from glob patterns relative to moduleDir. */
 function resolveReportDirs(moduleDir: string, reportGlobs: readonly string[]): Set<string> {
     const dirs = new Set<string>();
     for (const glob of reportGlobs) {
@@ -1045,117 +549,101 @@ function resolveReportDirs(moduleDir: string, reportGlobs: readonly string[]): S
     return dirs;
 }
 
-function readAllReports(
-    moduleDir: string,
-    reportGlobs: readonly string[],
-    outputChannel: vscode.OutputChannel,
-): SuiteResult[] {
-    const results: SuiteResult[] = [];
-    const nodefs = require('fs') as typeof import('fs');
-
-    // Convert globs to concrete paths
-    const resolvedDirs = resolveReportDirs(moduleDir, reportGlobs);
-
-    for (const dir of resolvedDirs) {
-        let files: string[];
-        try {
-            files = nodefs.readdirSync(dir);
-        } catch {
-            // Directory does not exist — skip silently
-            continue;
-        }
-
-        for (const file of files) {
-            if (file.startsWith('TEST-') && file.endsWith('.xml')) {
-                const xmlPath = path.join(dir, file);
-                const result = parseReportFile(xmlPath);
-                if (result) {
-                    results.push(result);
-                } else {
-                    outputChannel.appendLine(`[Runner] Failed to parse: ${xmlPath}`);
-                }
+function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs: ReadonlySet<string>): void {
+    if (fullRunModuleDirs.size > 0) {
+        for (const [suiteName, suite] of resultCache) {
+            if ([...fullRunModuleDirs].some((dir) => suite.xmlPath.startsWith(dir + path.sep) || suite.xmlPath.startsWith(dir + '/'))) {
+                resultCache.delete(suiteName);
             }
         }
     }
-
-    outputChannel.appendLine(`[Runner] Parsed ${results.length} XML report file(s)`);
-    return results;
-}
-
-function resolveTargetModules(
-    request: vscode.TestRunRequest,
-    treeBuilder: TestTreeBuilder,
-    modules: readonly MavenModule[],
-): Array<{ module: MavenModule; classNames: string[] }> {
-    if (!request.include || request.include.length === 0) {
-        // Run all modules
-        return modules.map((module) => ({ module, classNames: [] }));
-    }
-
-    // Group requested items by module (first path segment of their ID)
-    const moduleMap = new Map<string, { module: MavenModule; classNames: string[] }>();
-
-    for (const item of request.include) {
-        const parts = item.id.split('/');
-        const moduleArtifactId = parts[0];
-        const module = modules.find((m) => m.artifactId === moduleArtifactId);
-        if (!module) {
+    for (const suite of newResults) {
+        const existing = resultCache.get(suite.suiteName);
+        if (!existing) {
+            resultCache.set(suite.suiteName, suite);
             continue;
         }
-
-        if (!moduleMap.has(moduleArtifactId)) {
-            moduleMap.set(moduleArtifactId, { module, classNames: [] });
+        const cases = new Map(existing.testCases.map((tc) => [tc.methodName, tc]));
+        for (const tc of suite.testCases) {
+            cases.set(tc.methodName, tc);
         }
-
-        const entry = moduleMap.get(moduleArtifactId)!;
-
-        if (parts.length === 2) {
-            // Package selected — collect all root classes in that package
-            const packageName = parts[1];
-            const fqcns = treeBuilder.getFqcnsForPackage(moduleArtifactId, packageName);
-            for (const fqcn of fqcns) {
-                const simpleName = fqcn.substring(fqcn.lastIndexOf('.') + 1);
-                entry.classNames.push(simpleName);
-            }
-        } else if (parts.length >= 3) {
-            // Class or method selected
-            const classSegment = parts[2]; // e.g. "CreateChannelsAdTest" or "CreateChannelsAdTest#method"
-            entry.classNames.push(classSegment);
-        }
-        // If only module is selected (parts.length === 1), run the whole module
+        resultCache.set(suite.suiteName, { ...suite, testCases: Array.from(cases.values()) });
     }
-
-    return Array.from(moduleMap.values());
 }
 
-function collectFailedClasses(suiteResults: readonly SuiteResult[]): string[] {
-    const failed = new Set<string>();
+function updateFailedClasses(suiteResults: readonly SuiteResult[]): void {
+    lastFailedClassNames.clear();
     for (const suite of suiteResults) {
         for (const tc of suite.testCases) {
             if (tc.status === 'failed' || tc.status === 'error') {
-                failed.add(tc.className);
+                lastFailedClassNames.add(tc.className);
             }
         }
     }
-    return Array.from(failed);
 }
 
-// -------------------------------------------------------------------------
-// Result cache persistence (workspaceState)
-// -------------------------------------------------------------------------
-
-const RESULT_CACHE_KEY = 'mavenTestExplorer.resultCache';
-
-async function saveResultCache(context: vscode.ExtensionContext, cache: Map<string, SuiteResult>, outputChannel: vscode.OutputChannel): Promise<void> {
+async function saveResultCache(context: vscode.ExtensionContext): Promise<void> {
     const plain: Record<string, SuiteResult> = {};
-    for (const [k, v] of cache) { plain[k] = v; }
+    for (const [key, value] of resultCache) {
+        plain[key] = value;
+    }
     await context.workspaceState.update(RESULT_CACHE_KEY, plain);
-    outputChannel.appendLine(`[Cache] Saved ${cache.size} result(s) to workspaceState`);
+    outputChannel.appendLine(`[Cache] Saved ${resultCache.size} result(s) to workspaceState`);
 }
 
-function loadResultCache(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Map<string, SuiteResult> {
+function restoreResultCacheIfNeeded(context: vscode.ExtensionContext): void {
+    if (resultCache.size > 0) {
+        return;
+    }
     const plain = context.workspaceState.get<Record<string, SuiteResult>>(RESULT_CACHE_KEY);
-    outputChannel.appendLine(`[Cache] Load attempt — raw value type: ${typeof plain}, keys: ${plain ? Object.keys(plain).length : 'null'}`);
-    if (!plain) { return new Map(); }
-    return new Map(Object.entries(plain));
+    if (plain) {
+        for (const [key, value] of Object.entries(plain)) {
+            resultCache.set(key, value);
+        }
+        updateFailedClasses(Array.from(resultCache.values()));
+        outputChannel.appendLine(`[Cache] Restored ${resultCache.size} result(s) from workspaceState`);
+    }
+}
+
+function findModuleForClass(fqcn: string): MavenModule | undefined {
+    for (const entry of modulesWithClasses) {
+        if (entry.classes.some((cls) => toFqcn(cls) === fqcn)) {
+            return entry.module;
+        }
+    }
+    return currentModules[0];
+}
+
+function toFqcn(cls: TestClassInfo): string {
+    return cls.packageName ? `${cls.packageName}.${cls.className}` : cls.className;
+}
+
+function simpleClassTarget(fqcn: string): string {
+    return fqcn.substring(fqcn.lastIndexOf('.') + 1);
+}
+
+function normalizeClassTargets(targets: readonly string[]): string[] {
+    const grouped = new Map<string, string[]>();
+    for (const target of targets) {
+        if (!target.includes('#')) {
+            grouped.set(target, grouped.get(target) ?? []);
+            continue;
+        }
+        const [className, methodName] = target.split('#', 2);
+        const methods = grouped.get(className) ?? [];
+        methods.push(methodName);
+        grouped.set(className, methods);
+    }
+    return Array.from(grouped.entries()).map(([className, methods]) => (
+        methods.length > 0 ? `${className}#${methods.join('+')}` : className
+    ));
+}
+
+function emptyTree(): CustomTreeSnapshot {
+    return {
+        roots: [],
+        filteredRoots: [],
+        nodesById: new Map(),
+        stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 },
+    };
 }
