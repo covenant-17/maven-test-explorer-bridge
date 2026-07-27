@@ -39,7 +39,8 @@
       {
         "command": "mavenTestExplorer.runAllTests",
         "title": "Maven: Run All Tests",
-        "category": "Maven Test Explorer"
+        "category": "Maven Test Explorer",
+        "icon": "$(run-all)"
       },
       {
         "command": "mavenTestExplorer.rerunFailed",
@@ -141,6 +142,16 @@
     "submenus": [],
     "menus": {
       "view/title": [
+        {
+          "command": "mavenTestExplorer.refreshTests",
+          "group": "navigation",
+          "when": "view == mavenTestExplorer.view"
+        },
+        {
+          "command": "mavenTestExplorer.runAllTests",
+          "group": "navigation",
+          "when": "view == mavenTestExplorer.view"
+        },
         {
           "command": "mavenTestExplorer.clearResults",
           "group": "navigation",

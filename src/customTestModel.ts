@@ -79,69 +79,91 @@ export function buildCustomTree(
         nodesById.set(moduleNode.id, moduleNode);
 
         const packageNodes = new Map<string, CustomTestNode>();
-        const sortedClasses = [...classes].sort((a, b) => buildFqcn(a.packageName, a.className).localeCompare(buildFqcn(b.packageName, b.className)));
-        for (const cls of sortedClasses) {
-            const fqcn = buildFqcn(cls.packageName, cls.className);
-            const pkgId = packageId(module, cls.packageName);
-            let packageNode = packageNodes.get(pkgId);
-            if (!packageNode) {
-                packageNode = createNode({
-                    id: pkgId,
-                    kind: 'package',
-                    label: cls.packageName || '(default package)',
-                    parentId: moduleNode.id,
-                    module,
-                    packageName: cls.packageName,
-                });
-                packageNodes.set(pkgId, packageNode);
-                nodesById.set(packageNode.id, packageNode);
-                moduleNode.children.push(packageNode);
-            }
-
-            const classNode = createNode({
-                id: classId(module, fqcn),
-                kind: 'class',
-                label: cls.displayName ?? displayClassName(cls.className),
-                description: cls.displayName ? cls.className : undefined,
-                parentId: packageNode.id,
+        const classesByPackage = groupClassesByPackage(classes);
+        const packageNames = Array.from(classesByPackage.keys()).sort((a, b) => a.localeCompare(b));
+        for (const packageName of packageNames) {
+            const packageClasses = classesByPackage.get(packageName)!;
+            const pkgId = packageId(module, packageName);
+            const packageNode = createNode({
+                id: pkgId,
+                kind: 'package',
+                label: packageName || '(default package)',
+                parentId: moduleNode.id,
                 module,
-                packageName: cls.packageName,
-                fqcn,
-                className: cls.className,
-                sourcePath: cls.filePath,
-                tags: [...cls.tags],
-                annotations: cls.tags.map((tag) => `@Tag("${tag}")`),
+                packageName,
             });
-            packageNode.children.push(classNode);
-            nodesById.set(classNode.id, classNode);
-            classByFqcn.set(fqcn, classNode);
+            packageNodes.set(pkgId, packageNode);
+            nodesById.set(packageNode.id, packageNode);
+            moduleNode.children.push(packageNode);
 
-            for (const method of cls.methods) {
-                const tags = unique([...cls.tags, ...method.tags]);
-                const methodNode = createNode({
-                    id: methodId(module, fqcn, method.name),
-                    kind: 'method',
-                    label: `${method.displayName ?? method.name}()`,
-                    description: method.displayName ? method.name : undefined,
-                    parentId: classNode.id,
+            const classNodesByName = new Map<string, CustomTestNode>();
+            for (const cls of packageClasses) {
+                const fqcn = buildFqcn(cls.packageName, cls.className);
+                const classNode = createNode({
+                    id: classId(module, fqcn),
+                    kind: 'class',
+                    label: cls.displayName ?? displayClassName(cls.className),
+                    description: cls.displayName ? cls.className : undefined,
+                    parentId: packageNode.id,
                     module,
                     packageName: cls.packageName,
                     fqcn,
                     className: cls.className,
-                    methodName: method.name,
                     sourcePath: cls.filePath,
-                    line: method.line,
-                    tags,
-                    annotations: tags.map((tag) => `@Tag("${tag}")`),
+                    tags: [...cls.tags],
+                    annotations: cls.tags.map((tag) => `@Tag("${tag}")`),
                 });
-                classNode.children.push(methodNode);
-                nodesById.set(methodNode.id, methodNode);
-                methodByFqcnAndName.set(`${fqcn}#${method.name}`, methodNode);
+                classNodesByName.set(cls.className, classNode);
+                nodesById.set(classNode.id, classNode);
+                classByFqcn.set(fqcn, classNode);
             }
+
+            for (const cls of packageClasses) {
+                const fqcn = buildFqcn(cls.packageName, cls.className);
+                const classNode = classNodesByName.get(cls.className)!;
+                for (const method of cls.methods) {
+                    const tags = unique([...cls.tags, ...method.tags]);
+                    const methodNode = createNode({
+                        id: methodId(module, fqcn, method.name),
+                        kind: 'method',
+                        label: `${method.displayName ?? method.name}()`,
+                        description: method.displayName ? method.name : undefined,
+                        parentId: classNode.id,
+                        module,
+                        packageName: cls.packageName,
+                        fqcn,
+                        className: cls.className,
+                        methodName: method.name,
+                        sourcePath: cls.filePath,
+                        line: method.line,
+                        tags,
+                        annotations: tags.map((tag) => `@Tag("${tag}")`),
+                    });
+                    classNode.children.push(methodNode);
+                    nodesById.set(methodNode.id, methodNode);
+                    methodByFqcnAndName.set(`${fqcn}#${method.name}`, methodNode);
+                }
+            }
+
+            for (const cls of packageClasses) {
+                const classNode = classNodesByName.get(cls.className)!;
+                const parentClassName = directParentClassName(cls.className);
+                const parentNode = parentClassName ? classNodesByName.get(parentClassName) : undefined;
+                if (parentNode) {
+                    classNode.parentId = parentNode.id;
+                    parentNode.children.push(classNode);
+                } else {
+                    packageNode.children.push(classNode);
+                }
+            }
+            organizeChildren(packageNode);
         }
     }
 
     materializeResults(suiteResults, modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
+    for (const root of roots) {
+        organizeChildren(root);
+    }
     rollupAll(roots);
 
     const filter = (filterText ?? '').trim();
@@ -472,6 +494,46 @@ function simpleClassTarget(fqcn: string): string {
 
 function displayClassName(className: string): string {
     return className.split('$').pop() ?? className;
+}
+
+function groupClassesByPackage(classes: readonly TestClassInfo[]): Map<string, TestClassInfo[]> {
+    const grouped = new Map<string, TestClassInfo[]>();
+    for (const cls of classes) {
+        const existing = grouped.get(cls.packageName) ?? [];
+        existing.push(cls);
+        grouped.set(cls.packageName, existing);
+    }
+    return grouped;
+}
+
+function directParentClassName(className: string): string | undefined {
+    const index = className.lastIndexOf('$');
+    if (index < 0) {
+        return undefined;
+    }
+    return className.substring(0, index);
+}
+
+function organizeChildren(node: CustomTestNode): void {
+    const indexed = node.children.map((child, index) => ({ child, index }));
+    indexed.sort((a, b) => {
+        const groupDelta = childGroup(a.child) - childGroup(b.child);
+        if (groupDelta !== 0) {
+            return groupDelta;
+        }
+        return a.index - b.index;
+    });
+    node.children = indexed.map((entry) => entry.child);
+    for (const child of node.children) {
+        organizeChildren(child);
+    }
+}
+
+function childGroup(node: CustomTestNode): number {
+    if (node.kind === 'module' || node.kind === 'package' || node.kind === 'class') {
+        return 0;
+    }
+    return 1;
 }
 
 function visit(node: CustomTestNode, callback: (node: CustomTestNode) => void): void {
