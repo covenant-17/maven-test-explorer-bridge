@@ -63,6 +63,7 @@ export async function scanTestFiles(
             }
         }
     }
+    allUris.sort((a, b) => normalizePath(a.fsPath).localeCompare(normalizePath(b.fsPath)));
 
     const results: TestClassInfo[] = [];
     for (const uri of allUris) {
@@ -201,4 +202,8 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
  */
 export function buildFqcn(packageName: string, className: string): string {
     return packageName ? `${packageName}.${className}` : className;
+}
+
+function normalizePath(filePath: string): string {
+    return filePath.replace(/\\/g, '/').toLocaleLowerCase();
 }

@@ -33,6 +33,7 @@ export interface CustomTestNode {
     tags: string[];
     annotations: string[];
     status: CustomNodeStatus;
+    running?: boolean;
     stats: CustomNodeStats;
     durationMs?: number;
     isVirtual?: boolean;
@@ -55,12 +56,18 @@ export interface ModuleClasses {
     classes: readonly TestClassInfo[];
 }
 
+export interface CustomTreeRuntimeState {
+    readonly runningNodeIds?: ReadonlySet<string>;
+    readonly suiteResults?: readonly SuiteResult[];
+}
+
 const EMPTY_STATS: CustomNodeStats = { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 };
 
 export function buildCustomTree(
     modulesWithClasses: readonly ModuleClasses[],
     suiteResults: readonly SuiteResult[],
     filterText: string | undefined,
+    runtimeState?: CustomTreeRuntimeState,
 ): CustomTreeSnapshot {
     const nodesById = new Map<string, CustomTestNode>();
     const roots: CustomTestNode[] = [];
@@ -161,10 +168,12 @@ export function buildCustomTree(
     }
 
     materializeResults(suiteResults, modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
+    const completedRuntimeNodeIds = materializeResults(runtimeState?.suiteResults ?? [], modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
     for (const root of roots) {
         organizeChildren(root);
     }
     rollupAll(roots);
+    applyRunningState(roots, runtimeState?.runningNodeIds, completedRuntimeNodeIds);
 
     const filter = (filterText ?? '').trim();
     let filteredRoots = roots;
@@ -227,7 +236,8 @@ function materializeResults(
     nodesById: Map<string, CustomTestNode>,
     classByFqcn: Map<string, CustomTestNode>,
     methodByFqcnAndName: Map<string, CustomTestNode>,
-): void {
+): Set<string> {
+    const resolvedNodeIds = new Set<string>();
     for (const suite of suiteResults) {
         for (const tc of suite.testCases) {
             const module = findModuleForResult(tc, suite, modulesWithClasses, moduleByDir);
@@ -238,10 +248,12 @@ function materializeResults(
             if (!classNode) {
                 classNode = createResultOnlyClass(module, tc.className, nodesById, classByFqcn);
             }
+            addSubtreeIds(resolvedNodeIds, classNode);
 
             const exactMethod = methodByFqcnAndName.get(`${tc.className}#${tc.methodName}`);
             if (exactMethod) {
                 applyCaseResult(exactMethod, tc);
+                resolvedNodeIds.add(exactMethod.id);
                 continue;
             }
 
@@ -273,7 +285,16 @@ function materializeResults(
                 nodesById.set(node.id, node);
             }
             applyCaseResult(node, tc);
+            resolvedNodeIds.add(node.id);
         }
+    }
+    return resolvedNodeIds;
+}
+
+function addSubtreeIds(target: Set<string>, node: CustomTestNode): void {
+    target.add(node.id);
+    for (const child of node.children) {
+        addSubtreeIds(target, child);
     }
 }
 
@@ -375,6 +396,21 @@ function rollup(node: CustomTestNode): CustomNodeStats {
     node.stats = sumStats(node.children.map((child) => child.stats));
     node.status = aggregateStatus(node.stats);
     return node.stats;
+}
+
+function applyRunningState(
+    nodes: readonly CustomTestNode[],
+    runningNodeIds: ReadonlySet<string> | undefined,
+    completedRuntimeNodeIds: ReadonlySet<string>,
+): boolean {
+    let anyRunning = false;
+    for (const node of nodes) {
+        const childRunning = applyRunningState(node.children, runningNodeIds, completedRuntimeNodeIds);
+        const selfRunning = Boolean(runningNodeIds?.has(node.id)) && !completedRuntimeNodeIds.has(node.id);
+        node.running = selfRunning || childRunning;
+        anyRunning = anyRunning || Boolean(node.running);
+    }
+    return anyRunning;
 }
 
 function applyCaseResult(node: CustomTestNode, tc: TestCaseResult): void {
@@ -521,6 +557,10 @@ function organizeChildren(node: CustomTestNode): void {
         if (groupDelta !== 0) {
             return groupDelta;
         }
+        const nameDelta = compareSiblingNodes(a.child, b.child);
+        if (nameDelta !== 0) {
+            return nameDelta;
+        }
         return a.index - b.index;
     });
     node.children = indexed.map((entry) => entry.child);
@@ -534,6 +574,20 @@ function childGroup(node: CustomTestNode): number {
         return 0;
     }
     return 1;
+}
+
+function compareSiblingNodes(a: CustomTestNode, b: CustomTestNode): number {
+    if (a.kind === 'method' && b.kind === 'method' && a.line !== undefined && b.line !== undefined) {
+        return a.line - b.line;
+    }
+    if (a.kind !== 'method' && b.kind !== 'method') {
+        return nodeSortKey(a).localeCompare(nodeSortKey(b));
+    }
+    return 0;
+}
+
+function nodeSortKey(node: CustomTestNode): string {
+    return (node.fqcn ?? node.packageName ?? node.className ?? node.label).toLocaleLowerCase();
 }
 
 function visit(node: CustomTestNode, callback: (node: CustomTestNode) => void): void {

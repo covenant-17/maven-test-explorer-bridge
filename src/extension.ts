@@ -45,6 +45,12 @@ import {
 } from './customTestModel';
 import { CUSTOM_VIEW_ID, CustomTestWebviewProvider } from './customTestWebview';
 
+interface RunTarget {
+    module: MavenModule;
+    classNames: readonly string[];
+    runningNodeIds?: readonly string[];
+}
+
 let outputChannel: vscode.OutputChannel;
 let currentModules: MavenModule[] = [];
 let modulesWithClasses: ModuleClasses[] = [];
@@ -52,6 +58,8 @@ let currentTree: CustomTreeSnapshot = emptyTree();
 let activeFilterExpression = '';
 let selectedNodeId: string | undefined;
 let running = false;
+let runtimeRunningNodeIds = new Set<string>();
+let runtimeResultByXmlPath = new Map<string, SuiteResult>();
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
@@ -126,7 +134,15 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
 }
 
 function rebuildTree(): void {
-    currentTree = buildCustomTree(modulesWithClasses, Array.from(resultCache.values()), activeFilterExpression);
+    currentTree = buildCustomTree(
+        modulesWithClasses,
+        Array.from(resultCache.values()),
+        activeFilterExpression,
+        {
+            runningNodeIds: runtimeRunningNodeIds,
+            suiteResults: Array.from(runtimeResultByXmlPath.values()),
+        },
+    );
     if (!selectedNodeId || !currentTree.nodesById.has(selectedNodeId)) {
         selectedNodeId = undefined;
     }
@@ -142,7 +158,11 @@ function rebuildTree(): void {
 }
 
 async function runAll(context: vscode.ExtensionContext): Promise<void> {
-    await runTargets(context, currentModules.map((module) => ({ module, classNames: [] })), 'Run All');
+    await runTargets(context, currentModules.map((module) => ({
+        module,
+        classNames: [],
+        runningNodeIds: nodeIdsForModule(module),
+    })), 'Run All');
 }
 
 async function runNode(context: vscode.ExtensionContext, id: string): Promise<void> {
@@ -155,7 +175,7 @@ async function runNode(context: vscode.ExtensionContext, id: string): Promise<vo
         return;
     }
     const classNames = findRunnableClassTargets(node);
-    await runTargets(context, [{ module, classNames }], nodePathLabel(node));
+    await runTargets(context, [{ module, classNames, runningNodeIds: collectSubtreeNodeIds(node) }], nodePathLabel(node));
 }
 
 async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
@@ -163,14 +183,15 @@ async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
         vscode.window.showInformationMessage('Maven Test Explorer: No failed tests to re-run.');
         return;
     }
-    const moduleTargets = new Map<string, { module: MavenModule; classNames: string[] }>();
+    const moduleTargets = new Map<string, { module: MavenModule; classNames: string[]; runningNodeIds: string[] }>();
     for (const className of lastFailedClassNames) {
         const module = findModuleForClass(className);
         if (!module) {
             continue;
         }
-        const entry = moduleTargets.get(module.artifactId) ?? { module, classNames: [] };
+        const entry = moduleTargets.get(module.artifactId) ?? { module, classNames: [], runningNodeIds: [] };
         entry.classNames.push(simpleClassTarget(className));
+        entry.runningNodeIds.push(...nodeIdsForFqcn(className));
         moduleTargets.set(module.artifactId, entry);
     }
     await runTargets(context, Array.from(moduleTargets.values()), 'Re-run Failed');
@@ -178,7 +199,7 @@ async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
 
 async function runTargets(
     context: vscode.ExtensionContext,
-    targets: readonly { module: MavenModule; classNames: readonly string[] }[],
+    targets: readonly RunTarget[],
     historyLabel: string,
 ): Promise<void> {
     const settings = readSettings();
@@ -186,6 +207,8 @@ async function runTargets(
         outputChannel.show(true);
     }
     running = true;
+    runtimeRunningNodeIds = new Set(targets.flatMap((target) => target.runningNodeIds ?? []));
+    runtimeResultByXmlPath = new Map();
     rebuildTree();
 
     const cancellationSource = new vscode.CancellationTokenSource();
@@ -215,10 +238,16 @@ async function runTargets(
                 );
             }
 
-            const result = await runMaven(target.module.moduleDir, args, outputChannel, cancellationSource.token);
-            if (!result.cancelled) {
-                const suiteResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
-                allResults.push(...suiteResults);
+            const poller = startRuntimeReportPolling(target.module.moduleDir, settings.reportGlobs);
+            try {
+                const result = await runMaven(target.module.moduleDir, args, outputChannel, cancellationSource.token);
+                poller.flush();
+                if (!result.cancelled) {
+                    const suiteResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
+                    allResults.push(...suiteResults);
+                }
+            } finally {
+                poller.dispose();
             }
         }
     } finally {
@@ -229,7 +258,97 @@ async function runTargets(
             saveRunToHistory(context, allResults, historyLabel);
         }
         running = false;
+        runtimeRunningNodeIds = new Set();
+        runtimeResultByXmlPath = new Map();
         rebuildTree();
+    }
+}
+
+function nodeIdsForModule(module: MavenModule): string[] {
+    const root = currentTree.roots.find((node) => node.moduleDir === module.moduleDir);
+    return root ? collectSubtreeNodeIds(root) : [];
+}
+
+function nodeIdsForFqcn(fqcn: string): string[] {
+    for (const node of currentTree.nodesById.values()) {
+        if (node.kind === 'class' && node.fqcn === fqcn) {
+            return collectSubtreeNodeIds(node);
+        }
+    }
+    return [];
+}
+
+function collectSubtreeNodeIds(node: CustomTestNode): string[] {
+    const ids: string[] = [];
+    const visitNode = (current: CustomTestNode) => {
+        ids.push(current.id);
+        for (const child of current.children) {
+            visitNode(child);
+        }
+    };
+    visitNode(node);
+    return ids;
+}
+
+function startRuntimeReportPolling(
+    moduleDir: string,
+    reportGlobs: readonly string[],
+): { flush(): void; dispose(): void } {
+    const seenMtimes = new Map<string, number>();
+    for (const xmlPath of listReportFiles(moduleDir, reportGlobs)) {
+        seenMtimes.set(xmlPath, fileMtimeMs(xmlPath));
+    }
+
+    const scan = () => {
+        let changed = false;
+        for (const xmlPath of listReportFiles(moduleDir, reportGlobs)) {
+            const mtimeMs = fileMtimeMs(xmlPath);
+            if (seenMtimes.get(xmlPath) === mtimeMs) {
+                continue;
+            }
+            const result = parseReportFile(xmlPath);
+            if (!result) {
+                continue;
+            }
+            seenMtimes.set(xmlPath, mtimeMs);
+            runtimeResultByXmlPath.set(result.xmlPath, result);
+            changed = true;
+        }
+        if (changed) {
+            rebuildTree();
+        }
+    };
+
+    const timer = setInterval(scan, 350);
+    return {
+        flush: scan,
+        dispose: () => clearInterval(timer),
+    };
+}
+
+function listReportFiles(moduleDir: string, reportGlobs: readonly string[]): string[] {
+    const files: string[] = [];
+    for (const dir of resolveReportDirs(moduleDir, reportGlobs)) {
+        let entries: string[];
+        try {
+            entries = fs.readdirSync(dir);
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (entry.startsWith('TEST-') && entry.endsWith('.xml')) {
+                files.push(path.join(dir, entry));
+            }
+        }
+    }
+    return files.sort((a, b) => a.localeCompare(b));
+}
+
+function fileMtimeMs(filePath: string): number {
+    try {
+        return fs.statSync(filePath).mtimeMs;
+    } catch {
+        return -1;
     }
 }
 
