@@ -32,12 +32,11 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
-- **Advanced filter** — use the Testing sidebar filter button for `AND` / `&&`, `OR` / `||`, text terms, JUnit tags and result tags such as `@mavenTestExplorer:status.failed`; submit an empty expression to clear it
-- **Clickable `@Tag` annotations** — Ctrl+Click a JUnit `@Tag("smoke")` value in Java source to filter the Maven Test Explorer tree by that tag
+- **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
 - **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
-- **JUnit `@Tag` filtering** — `@Tag("smoke")` / `@Tag("coverage")` annotations on classes and methods are read at scan time and exposed as VS Code test tags; use the filter box in Test Explorer (e.g. `@smoke`) to show only matching items. Method-level tags inherit class-level tags automatically. Result tags use the extension namespace, e.g. `@mavenTestExplorer:status.failed`. For richer expressions, use the Testing sidebar `Maven: Advanced Filter (AND / OR)` button, for example `@mavenTestExplorer:needCodeReviewD24 OR @mavenTestExplorer:status.failed`
+- **JUnit `@Tag` filtering** — class and method tags are available from the custom filter input with project-scoped names such as `@javatest.smoke`; suggestions include contextual match counts, and method-level filters include inherited class tags
 
 ---
 
@@ -81,8 +80,6 @@ All commands are available via **Command Palette** (`Ctrl+Shift+P`):
 | `Maven: Copy Maven Command for Test` | Copy the last Maven command to clipboard |
 | `Maven: Clear Test Results` | Reset all result icons to neutral |
 | `Maven: Show Run History` | Browse and restore past runs |
-| `Maven: Advanced Filter (AND / OR)` | Filter the Test Explorer tree with `AND` / `&&`, `OR` / `||`, text terms, tags and result states |
-| `Maven: Clear Test Filter Expression` | Restore the full Test Explorer tree |
 
 ---
 

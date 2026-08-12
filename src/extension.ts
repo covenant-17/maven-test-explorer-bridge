@@ -14,11 +14,9 @@ import {
 } from './mavenRunner';
 import { readSettings } from './settings';
 import {
-    CMD_APPLY_FILTER,
     CMD_ATTACH_TO_CLAUDE,
     CMD_ATTACH_TO_COPILOT,
     CMD_CLEAN_REPORTS,
-    CMD_CLEAR_FILTER,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_COPY,
@@ -28,15 +26,21 @@ import {
     CMD_COPY_MAVEN_COMMAND,
     CMD_COPY_METHOD_NAME,
     CMD_COPY_PACKAGE_NAME,
+    CMD_COLLAPSE_ALL,
+    CMD_EXPAND_ALL,
     CMD_REFRESH_TESTS,
     CMD_RERUN_FAILED,
     CMD_RUN_ALL_TESTS,
     CMD_SHOW_HISTORY,
+    CMD_SORT_BY_DURATION,
+    CMD_SORT_BY_LOCATION,
+    CMD_SORT_BY_STATUS,
     OUTPUT_CHANNEL_NAME,
 } from './constants';
 import { clearHistory, loadHistory, saveRunToHistory } from './runHistory';
 import {
     buildCustomTree,
+    CustomSortMode,
     CustomTestNode,
     CustomTreeSnapshot,
     findRunnableClassTargets,
@@ -56,6 +60,7 @@ let currentModules: MavenModule[] = [];
 let modulesWithClasses: ModuleClasses[] = [];
 let currentTree: CustomTreeSnapshot = emptyTree();
 let activeFilterExpression = '';
+let activeSortMode: CustomSortMode = 'location';
 let selectedNodeId: string | undefined;
 let running = false;
 let runtimeRunningNodeIds = new Set<string>();
@@ -68,6 +73,7 @@ const RESULT_CACHE_KEY = 'mavenTestExplorer.resultCache';
 const EXPANDED_IDS_KEY = 'mavenTestExplorer.customExpandedIds';
 const SELECTED_ID_KEY = 'mavenTestExplorer.customSelectedId';
 const FILTER_KEY = 'mavenTestExplorer.customFilter';
+const SORT_MODE_KEY = 'mavenTestExplorer.customSortMode';
 
 let provider: CustomTestWebviewProvider;
 
@@ -77,6 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
 
     activeFilterExpression = context.workspaceState.get<string>(FILTER_KEY, '');
+    activeSortMode = context.workspaceState.get<CustomSortMode>(SORT_MODE_KEY, 'location');
     selectedNodeId = context.workspaceState.get<string>(SELECTED_ID_KEY);
     for (const id of context.workspaceState.get<string[]>(EXPANDED_IDS_KEY, [])) {
         expandedIds.add(id);
@@ -93,6 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearFilter: () => applyFilter(context, ''),
         openNode: (id) => openNode(id),
         runNode: (id) => runNode(context, id),
+        runNodes: (ids) => runNodes(context, ids),
         selectNode: (id) => selectNode(context, id),
         setExpanded: (id, expanded) => setExpanded(context, id, expanded),
         copy: (kind, id) => copyNode(kind, id),
@@ -101,7 +109,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(CUSTOM_VIEW_ID, provider));
 
     registerCommands(context);
-    registerTagDocumentLinks(context);
     registerJavaAutoRefresh(context);
     registerReportWatcher(context);
 
@@ -141,6 +148,7 @@ function rebuildTree(): void {
         {
             runningNodeIds: runtimeRunningNodeIds,
             suiteResults: Array.from(runtimeResultByXmlPath.values()),
+            sortMode: activeSortMode,
         },
     );
     if (!selectedNodeId || !currentTree.nodesById.has(selectedNodeId)) {
@@ -148,6 +156,9 @@ function rebuildTree(): void {
     }
     provider?.updateState({
         roots: currentTree.filteredRoots,
+        availableTags: collectProjectTags(currentTree.roots),
+        availableAnnotations: collectProjectAnnotations(currentTree.roots),
+        filterFacets: collectFilterFacets(currentTree.roots),
         stats: currentTree.stats,
         filterText: activeFilterExpression,
         filterError: currentTree.filterError,
@@ -155,6 +166,22 @@ function rebuildTree(): void {
         selectedId: selectedNodeId,
         running,
     });
+    void vscode.commands.executeCommand(
+        'setContext',
+        'mavenTestExplorer.hasExpandedItems',
+        hasVisibleExpandedItems(currentTree.filteredRoots),
+    );
+    void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.sortMode', activeSortMode);
+}
+
+function hasVisibleExpandedItems(roots: readonly CustomTestNode[]): boolean {
+    const visitNode = (node: CustomTestNode): boolean => {
+        if (node.children.length > 0 && expandedIds.has(node.id)) {
+            return true;
+        }
+        return node.children.some(visitNode);
+    };
+    return roots.some(visitNode);
 }
 
 async function runAll(context: vscode.ExtensionContext): Promise<void> {
@@ -165,17 +192,125 @@ async function runAll(context: vscode.ExtensionContext): Promise<void> {
     })), 'Run All');
 }
 
+function collectProjectTags(roots: readonly CustomTestNode[]): string[] {
+    const tags = new Set<string>();
+    const visitNode = (node: CustomTestNode): void => {
+        for (const tag of node.tags) {
+            tags.add(`${projectTagNamespace(node)}.${tag}`);
+        }
+        for (const child of node.children) {
+            visitNode(child);
+        }
+    };
+    for (const root of roots) {
+        visitNode(root);
+    }
+    return Array.from(tags).sort((a, b) => a.localeCompare(b));
+}
+
+function collectProjectAnnotations(roots: readonly CustomTestNode[]): string[] {
+    const annotations = new Set<string>();
+    const visitNode = (node: CustomTestNode): void => {
+        for (const annotation of node.sourceAnnotations) {
+            annotations.add(`${projectTagNamespace(node)}.annotation.${annotation.name.toLocaleLowerCase()}`);
+        }
+        for (const child of node.children) {
+            visitNode(child);
+        }
+    };
+    for (const root of roots) {
+        visitNode(root);
+    }
+    return Array.from(annotations).sort((a, b) => a.localeCompare(b));
+}
+
+function collectFilterFacets(roots: readonly CustomTestNode[]): string[][] {
+    const facets: string[][] = [];
+    const visitNode = (node: CustomTestNode): void => {
+        const isTestCase = (node.kind === 'method' || node.kind === 'virtualMethod')
+            && !node.hasVirtualInvocations;
+        if (isTestCase) {
+            const values = new Set<string>();
+            if (node.status === 'failed' || node.status === 'error') {
+                values.add('@failed');
+            }
+            if (node.status !== 'unknown') {
+                values.add('@executed');
+            }
+            for (const tag of new Set(node.tags)) {
+                values.add(`@${projectTagNamespace(node)}.${tag}`);
+            }
+            for (const annotation of node.sourceAnnotations) {
+                values.add(
+                    `@${projectTagNamespace(node)}.annotation.${annotation.name.toLocaleLowerCase()}=${annotation.value}`,
+                );
+            }
+            facets.push(Array.from(values));
+        }
+        for (const child of node.children) {
+            visitNode(child);
+        }
+    };
+    for (const root of roots) {
+        visitNode(root);
+    }
+    return facets;
+}
+
+function projectTagNamespace(node: CustomTestNode): string {
+    return path.basename(node.moduleDir).toLocaleLowerCase();
+}
+
 async function runNode(context: vscode.ExtensionContext, id: string): Promise<void> {
     const node = currentTree.nodesById.get(id);
     if (!node) {
         return;
     }
-    const module = currentModules.find((item) => item.artifactId === node.moduleId);
+    const module = currentModules.find((item) => item.moduleDir === node.moduleDir);
     if (!module) {
         return;
     }
     const classNames = findRunnableClassTargets(node);
     await runTargets(context, [{ module, classNames, runningNodeIds: collectSubtreeNodeIds(node) }], nodePathLabel(node));
+}
+
+async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]): Promise<void> {
+    const selectedIds = new Set(ids.filter((id) => currentTree.nodesById.has(id)));
+    const nodes = Array.from(selectedIds)
+        .map((id) => currentTree.nodesById.get(id))
+        .filter((node): node is CustomTestNode => Boolean(node))
+        .filter((node) => {
+            let parentId = node.parentId;
+            while (parentId) {
+                if (selectedIds.has(parentId)) {
+                    return false;
+                }
+                parentId = currentTree.nodesById.get(parentId)?.parentId;
+            }
+            return true;
+        });
+    if (nodes.length === 0) {
+        return;
+    }
+    const grouped = new Map<string, { module: MavenModule; classNames: string[]; runningNodeIds: string[] }>();
+    for (const node of nodes) {
+        const module = currentModules.find((item) => item.moduleDir === node.moduleDir);
+        if (!module) {
+            continue;
+        }
+        const target = grouped.get(module.moduleDir) ?? { module, classNames: [], runningNodeIds: [] };
+        target.classNames.push(...findRunnableClassTargets(node));
+        target.runningNodeIds.push(...collectSubtreeNodeIds(node));
+        grouped.set(module.moduleDir, target);
+    }
+    if (grouped.size > 0) {
+        const targets = Array.from(grouped.values()).map((target) => ({
+            ...target,
+            classNames: Array.from(new Set(target.classNames)),
+            runningNodeIds: Array.from(new Set(target.runningNodeIds)),
+        }));
+        await runTargets(context, targets, `Run ${ids.length} Tests`);
+    }
 }
 
 async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
@@ -356,6 +491,11 @@ function registerCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(CMD_REFRESH_TESTS, () => refresh(context, true)),
         vscode.commands.registerCommand(CMD_RUN_ALL_TESTS, () => runAll(context)),
+        vscode.commands.registerCommand(CMD_EXPAND_ALL, () => setAllExpanded(context, true)),
+        vscode.commands.registerCommand(CMD_COLLAPSE_ALL, () => setAllExpanded(context, false)),
+        vscode.commands.registerCommand(CMD_SORT_BY_LOCATION, () => setSortMode(context, 'location')),
+        vscode.commands.registerCommand(CMD_SORT_BY_STATUS, () => setSortMode(context, 'status')),
+        vscode.commands.registerCommand(CMD_SORT_BY_DURATION, () => setSortMode(context, 'duration')),
         vscode.commands.registerCommand(CMD_RERUN_FAILED, () => rerunFailed(context)),
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, async () => {
             for (const module of currentModules) {
@@ -366,17 +506,6 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, () => clearResults(context, false)),
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, () => clearResults(context, true)),
         vscode.commands.registerCommand(CMD_SHOW_HISTORY, () => showHistory(context)),
-        vscode.commands.registerCommand(CMD_APPLY_FILTER, async (value?: string) => {
-            const next = value ?? await vscode.window.showInputBox({
-                title: 'Maven Test Explorer Filter',
-                value: activeFilterExpression,
-                placeHolder: '@tag AND failed',
-            });
-            if (next !== undefined) {
-                await applyFilter(context, next);
-            }
-        }),
-        vscode.commands.registerCommand(CMD_CLEAR_FILTER, () => applyFilter(context, '')),
         vscode.commands.registerCommand(CMD_COPY, () => copyNode('path')),
         vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, () => copyNode('maven')),
         vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, () => copyNode('maven')),
@@ -469,6 +598,32 @@ async function setExpanded(context: vscode.ExtensionContext, id: string, expande
     rebuildTree();
 }
 
+async function setAllExpanded(context: vscode.ExtensionContext, expanded: boolean): Promise<void> {
+    if (expanded) {
+        const visitNode = (node: CustomTestNode): void => {
+            if (node.children.length > 0) {
+                expandedIds.add(node.id);
+            }
+            for (const child of node.children) {
+                visitNode(child);
+            }
+        };
+        for (const root of currentTree.filteredRoots) {
+            visitNode(root);
+        }
+    } else {
+        expandedIds.clear();
+    }
+    await context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds));
+    rebuildTree();
+}
+
+async function setSortMode(context: vscode.ExtensionContext, sortMode: CustomSortMode): Promise<void> {
+    activeSortMode = sortMode;
+    await context.workspaceState.update(SORT_MODE_KEY, sortMode);
+    rebuildTree();
+}
+
 async function copyNode(kind: string, id = selectedNodeId): Promise<void> {
     const node = id ? currentTree.nodesById.get(id) : undefined;
     if (!node) {
@@ -502,7 +657,7 @@ async function copyTextForNode(kind: string, node: CustomTestNode): Promise<stri
 }
 
 async function mavenCommandForNode(node: CustomTestNode): Promise<string | undefined> {
-    const module = currentModules.find((item) => item.artifactId === node.moduleId);
+    const module = currentModules.find((item) => item.moduleDir === node.moduleDir);
     if (!module) {
         return undefined;
     }
@@ -588,41 +743,6 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
     watcher.onDidChange(schedule);
     watcher.onDidDelete(schedule);
     context.subscriptions.push(watcher);
-}
-
-function registerTagDocumentLinks(context: vscode.ExtensionContext): void {
-    context.subscriptions.push(
-        vscode.languages.registerDocumentLinkProvider(
-            { language: 'java', scheme: 'file' },
-            {
-                provideDocumentLinks(document): vscode.DocumentLink[] {
-                    const links: vscode.DocumentLink[] = [];
-                    const tagPattern = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
-                    for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
-                        const line = document.lineAt(lineIndex);
-                        tagPattern.lastIndex = 0;
-                        let match: RegExpExecArray | null;
-                        while ((match = tagPattern.exec(line.text)) !== null) {
-                            const tagName = match[1].trim();
-                            if (!tagName) {
-                                continue;
-                            }
-                            const tagStart = line.text.indexOf(match[1], match.index);
-                            const range = new vscode.Range(
-                                new vscode.Position(lineIndex, tagStart),
-                                new vscode.Position(lineIndex, tagStart + match[1].length),
-                            );
-                            const args = encodeURIComponent(JSON.stringify([`@${tagName}`]));
-                            const link = new vscode.DocumentLink(range, vscode.Uri.parse(`command:${CMD_APPLY_FILTER}?${args}`));
-                            link.tooltip = `Filter Maven Test Explorer by @${tagName}`;
-                            links.push(link);
-                        }
-                    }
-                    return links;
-                },
-            },
-        ),
-    );
 }
 
 async function discoverModules(): Promise<MavenModule[]> {

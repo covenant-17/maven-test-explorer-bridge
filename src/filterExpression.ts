@@ -80,6 +80,11 @@ function tokenize(input: string): Token[] {
             i++;
             continue;
         }
+        if (ch === ',') {
+            tokens.push({ kind: 'and', value: ch });
+            i++;
+            continue;
+        }
         if (input.startsWith('&&', i)) {
             tokens.push({ kind: 'and', value: '&&' });
             i += 2;
@@ -92,12 +97,19 @@ function tokenize(input: string): Token[] {
         }
 
         let end = i;
+        let inQuotes = false;
         while (
             end < input.length
-            && !/\s/.test(input[end])
-            && input[end] !== '('
-            && input[end] !== ')'
+            && (inQuotes || (
+                !/\s/.test(input[end])
+                && input[end] !== '('
+                && input[end] !== ')'
+                && input[end] !== ','
+            ))
         ) {
+            if (input[end] === '"' && input[end - 1] !== '\\') {
+                inQuotes = !inQuotes;
+            }
             end++;
         }
         const value = input.substring(i, end);
@@ -257,9 +269,10 @@ function buildMethodFacts(
 }
 
 function statusAliases(tc: TestCaseResult): Set<string> {
-    const aliases = new Set<string>([statusTagId(tc.status)]);
+    const aliases = new Set<string>([statusTagId(tc.status), tc.status, 'executed']);
     if (tc.status === 'error') {
         aliases.add(statusTagId('failed'));
+        aliases.add('failed');
     }
     return aliases;
 }

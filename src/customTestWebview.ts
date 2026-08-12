@@ -5,6 +5,9 @@ export const CUSTOM_VIEW_ID = 'mavenTestExplorer.view';
 
 export interface WebviewState {
     roots: readonly CustomTestNode[];
+    availableTags: readonly string[];
+    availableAnnotations: readonly string[];
+    filterFacets: readonly (readonly string[])[];
     stats: CustomNodeStats;
     filterText: string;
     filterError?: string;
@@ -24,6 +27,7 @@ export interface WebviewHandlers {
     clearFilter(): void | Promise<void>;
     openNode(id: string): void | Promise<void>;
     runNode(id: string): void | Promise<void>;
+    runNodes(ids: readonly string[]): void | Promise<void>;
     selectNode(id: string): void | Promise<void>;
     setExpanded(id: string, expanded: boolean): void | Promise<void>;
     copy(kind: string, id?: string): void | Promise<void>;
@@ -34,6 +38,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
     private view: vscode.WebviewView | undefined;
     private state: WebviewState = {
         roots: [],
+        availableTags: [],
+        availableAnnotations: [],
+        filterFacets: [],
         stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 },
         filterText: '',
         expandedIds: [],
@@ -101,6 +108,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'runNode':
                 if (message.id) { await this.handlers.runNode(message.id); }
+                break;
+            case 'runNodes':
+                if (message.ids?.length) { await this.handlers.runNodes(message.ids); }
                 break;
             case 'selectNode':
                 if (message.id) { await this.handlers.selectNode(message.id); }
@@ -210,6 +220,61 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .filter::placeholder {
             color: var(--vscode-input-placeholderForeground);
         }
+        .filter-help {
+            cursor: help;
+        }
+        .filter-suggestions {
+            position: absolute;
+            z-index: 40;
+            top: calc(100% + 2px);
+            left: -1px;
+            right: -1px;
+            max-height: min(280px, calc(100vh - 64px));
+            padding: 4px;
+            color: var(--vscode-menu-foreground);
+            background: var(--vscode-menu-background);
+            border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent));
+            box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+            overflow-y: auto;
+        }
+        .filter-suggestions[hidden] {
+            display: none;
+        }
+        .filter-suggestion {
+            width: 100%;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            color: inherit;
+            background: transparent;
+            border: 1px solid transparent;
+            text-align: left;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .filter-suggestion-label {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .filter-suggestion-count {
+            flex: 0 0 auto;
+            margin-left: auto;
+            padding-left: 12px;
+            color: var(--vscode-descriptionForeground);
+            font-variant-numeric: tabular-nums;
+        }
+        .filter-suggestion.active .filter-suggestion-count,
+        .filter-suggestion:hover .filter-suggestion-count {
+            color: inherit;
+        }
+        .filter-suggestion:hover,
+        .filter-suggestion.active {
+            color: var(--vscode-list-activeSelectionForeground, var(--vscode-menu-selectionForeground));
+            background: var(--vscode-list-activeSelectionBackground, var(--vscode-menu-selectionBackground));
+            border-color: var(--vscode-focusBorder);
+        }
         .icon-button {
             flex: 0 0 auto;
             width: 22px;
@@ -267,8 +332,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .codicon-namespace::before { content: "\\ea8b"; }
         .codicon-class::before { content: "\\eb5b"; }
         .codicon-method::before { content: "\\ea8c"; }
+        .codicon-go-to-file::before { content: "\\ea94"; }
         .codicon-event::before { content: "\\ea86"; }
         .codicon-root::before { content: "\\ea65"; }
+        .codicon-type-hierarchy-sub::before { content: "\\ebba"; }
         .codicon-empty::before { content: ""; }
         .summary {
             flex: 0 0 auto;
@@ -334,6 +401,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .failed { color: var(--vscode-testing-iconFailed); }
         .error { color: var(--vscode-testing-iconErrored, var(--vscode-testing-iconFailed)); }
         .skipped { color: var(--vscode-testing-iconSkipped); }
+        .virtual-invocations { color: var(--vscode-icon-foreground, var(--vscode-foreground)); }
         .unknown { color: var(--vscode-descriptionForeground); }
         .running-label {
             color: var(--vscode-testing-runAction, var(--vscode-foreground));
@@ -609,6 +677,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             white-space: nowrap;
             cursor: pointer;
         }
+        .menu-item .menu-chevron {
+            margin-left: auto;
+        }
+        .menu-separator {
+            height: 1px;
+            margin: 4px 5px;
+            background: var(--vscode-menu-separatorBackground, var(--vscode-menu-border, var(--vscode-widget-border)));
+        }
         .menu-item:focus-visible {
             outline: 0;
         }
@@ -668,19 +744,21 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
     <div class="test-explorer">
         <div class="filter-row">
             <div id="filterShell" class="filter-shell">
-                <span class="codicon codicon-filter" aria-hidden="true"></span>
-                <input id="filter" class="filter" aria-label="Filter tests" placeholder="Filter (text, !exclude, @tag, status:failed)">
-                <button id="clearFilterButton" class="icon-button" type="button" title="Clear Filter" aria-label="Clear Filter"><span class="codicon codicon-close"></span></button>
+                <span id="filterHelp" class="codicon codicon-filter filter-help" role="img" tabindex="0" aria-label="Filter syntax help"></span>
+                <input id="filter" class="filter" aria-label="Filter tests" placeholder="Filter tests (type @ for suggestions)">
+                <button id="clearFilterButton" class="icon-button" type="button" aria-label="Clear Filter"><span class="codicon codicon-close"></span></button>
+                <div id="filterSuggestions" class="filter-suggestions" role="listbox" hidden></div>
             </div>
         </div>
         <div id="summary" class="summary" aria-live="polite"></div>
         <div id="filterError" class="filter-error" hidden></div>
         <div class="tree-wrap">
-            <div id="tree" class="tree" tabindex="0" role="tree" aria-label="Maven Test Explorer tree" aria-activedescendant="">
+            <div id="tree" class="tree" tabindex="0" role="tree" aria-label="Maven Test Explorer tree" aria-multiselectable="true" aria-activedescendant="">
                 <div id="rows" class="rows"></div>
             </div>
         </div>
         <div id="copyMenu" class="menu" role="menu" hidden></div>
+        <div id="copySubmenu" class="menu" role="menu" hidden></div>
         <div id="nodeTooltip" class="node-tooltip" hidden></div>
     </div>
     <script nonce="${nonce}">
@@ -688,8 +766,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const ROW_HEIGHT = 22;
         const TOOLTIP_LINE_BREAK = String.fromCharCode(10);
         const TOOLTIP_DELAY_MS = 1000;
-        let state = { roots: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '' };
+        const SYSTEM_FILTERS = ['@failed', '@executed'];
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '' };
         let filterTimer;
+        let filterSuggestionItems = [];
+        let filterSuggestionIndex = -1;
+        let suppressFilterSuggestions = true;
         let tooltipTimer;
         let tooltipOwnerId = null;
         let pendingTooltip;
@@ -698,32 +780,85 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let menuItems = [];
         let menuIndex = -1;
         let menuNode = null;
+        let selectedNodeIds = new Set();
+        let selectionAnchorId = null;
+        let submenuItems = [];
+        let submenuIndex = -1;
+        let submenuTrigger = null;
 
         const treeEl = document.getElementById('tree');
         let rowsEl = document.getElementById('rows');
         const summaryEl = document.getElementById('summary');
         const filterEl = document.getElementById('filter');
+        const filterHelpEl = document.getElementById('filterHelp');
         const filterShellEl = document.getElementById('filterShell');
+        const filterSuggestionsEl = document.getElementById('filterSuggestions');
         const errorEl = document.getElementById('filterError');
         const copyMenuEl = document.getElementById('copyMenu');
+        const copySubmenuEl = document.getElementById('copySubmenu');
         const nodeTooltipEl = document.getElementById('nodeTooltip');
         const clearFilterButton = document.getElementById('clearFilterButton');
 
+        const filterHelpText = [
+            'Filter syntax',
+            'Type @ to choose tags and annotations.',
+            'Comma, AND, or && match all filters.',
+            'OR or || matches any filter.',
+            'annotation=value partially matches a value.',
+            'annotation="value" exactly matches a value.',
+        ].join(TOOLTIP_LINE_BREAK);
+        filterHelpEl.addEventListener('mouseenter', () => scheduleNodeTooltip('filter-help', filterHelpText, filterHelpEl));
+        filterHelpEl.addEventListener('mouseleave', () => hideNodeTooltip('filter-help'));
+        filterHelpEl.addEventListener('focus', () => scheduleNodeTooltip('filter-help', filterHelpText, filterHelpEl));
+        filterHelpEl.addEventListener('blur', () => hideNodeTooltip('filter-help'));
+        withInternalTooltip(clearFilterButton, 'clear-filter', 'Clear Filter');
+
         clearFilterButton.addEventListener('click', () => {
             filterEl.value = '';
+            suppressFilterSuggestions = true;
+            hideFilterSuggestions();
             post('clearFilter');
             filterEl.focus();
         });
 
-        filterEl.addEventListener('input', () => {
+        filterEl.addEventListener('input', (event) => {
             clearTimeout(filterTimer);
+            const typedAt = event.inputType === 'insertText' && event.data === '@';
+            const token = filterTokenAtCursor();
+            const typedAnnotationEquals = event.inputType === 'insertText'
+                && event.data === '='
+                && Boolean(annotationValueContext(token?.value));
+            if (typedAt || typedAnnotationEquals) {
+                suppressFilterSuggestions = false;
+            }
+            if (suppressFilterSuggestions || !token || !token.value.startsWith('@')) {
+                suppressFilterSuggestions = true;
+                hideFilterSuggestions();
+            } else {
+                renderFilterSuggestions();
+            }
             filterTimer = setTimeout(() => post('applyFilter', { value: filterEl.value }), 180);
         });
 
         filterEl.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && filterEl.value) {
+            if (!filterSuggestionsEl.hidden && event.key === 'ArrowDown') {
+                event.preventDefault();
+                setFilterSuggestionIndex(Math.min(filterSuggestionIndex + 1, filterSuggestionItems.length - 1));
+            } else if (!filterSuggestionsEl.hidden && event.key === 'ArrowUp') {
+                event.preventDefault();
+                setFilterSuggestionIndex(Math.max(filterSuggestionIndex - 1, 0));
+            } else if (!filterSuggestionsEl.hidden && (event.key === 'Enter' || event.key === 'Tab')) {
+                event.preventDefault();
+                applyFilterSuggestion(filterSuggestionItems[Math.max(filterSuggestionIndex, 0)]?.dataset.value);
+            } else if (!filterSuggestionsEl.hidden && event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                suppressFilterSuggestions = true;
+                hideFilterSuggestions();
+            } else if (event.key === 'Escape' && filterEl.value) {
                 event.stopPropagation();
                 filterEl.value = '';
+                suppressFilterSuggestions = true;
                 post('clearFilter');
             } else if (event.key === 'ArrowDown') {
                 event.preventDefault();
@@ -735,8 +870,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         treeEl.addEventListener('scroll', hideNodeTooltip);
 
         document.addEventListener('click', (event) => {
-            if (!copyMenuEl.contains(event.target)) {
+            if (!copyMenuEl.contains(event.target) && !copySubmenuEl.contains(event.target)) {
                 hideCopyMenu();
+            }
+            if (!filterShellEl.contains(event.target)) {
+                suppressFilterSuggestions = true;
+                hideFilterSuggestions();
             }
         });
 
@@ -745,6 +884,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (message.type === 'stateUpdated') {
                 const previousTop = treeEl.scrollTop;
                 state = message.state || state;
+                const visibleIds = new Set(flattenRoots(state.roots || []).map(entry => entry.node.id));
+                selectedNodeIds = new Set(Array.from(selectedNodeIds).filter(id => visibleIds.has(id)));
+                if (selectedNodeIds.size === 0 && state.selectedId && visibleIds.has(state.selectedId)) {
+                    selectedNodeIds.add(state.selectedId);
+                }
+                if (!selectionAnchorId && state.selectedId) {
+                    selectionAnchorId = state.selectedId;
+                }
                 hideNodeTooltip();
                 render(previousTop);
             }
@@ -767,6 +914,200 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             renderRows(previousTop);
         }
 
+        function renderFilterSuggestions() {
+            if (suppressFilterSuggestions) {
+                hideFilterSuggestions();
+                return;
+            }
+            const token = filterTokenAtCursor();
+            if (!token || !token.value.startsWith('@')) {
+                hideFilterSuggestions();
+                return;
+            }
+            const annotationContext = annotationValueContext(token.value);
+            const suggestions = annotationContext
+                ? annotationValueSuggestions(annotationContext)
+                : filterNameSuggestions(token.value);
+            filterSuggestionsEl.textContent = '';
+            filterSuggestionItems = suggestions.map((suggestion, index) => {
+                const item = document.createElement('button');
+                item.className = 'filter-suggestion';
+                item.type = 'button';
+                item.dataset.value = suggestion.value;
+                item.setAttribute('role', 'option');
+                item.append(
+                    textSpan(suggestion.label, 'filter-suggestion-label'),
+                    textSpan(String(contextualFilterCount(suggestion.value)), 'filter-suggestion-count'),
+                );
+                item.addEventListener('mouseenter', () => setFilterSuggestionIndex(index));
+                item.addEventListener('mousedown', event => event.preventDefault());
+                item.addEventListener('click', () => applyFilterSuggestion(suggestion.value));
+                filterSuggestionsEl.appendChild(item);
+                return item;
+            });
+            filterSuggestionsEl.hidden = filterSuggestionItems.length === 0;
+            setFilterSuggestionIndex(filterSuggestionItems.length > 0 ? 0 : -1);
+        }
+
+        function filterNameSuggestions(tokenValue) {
+            const prefix = tokenValue.toLocaleLowerCase();
+            const projectTags = (state.availableTags || []).map(tag => '@' + tag);
+            const projectAnnotations = (state.availableAnnotations || []).map(annotation => '@' + annotation);
+            return [...projectTags, ...SYSTEM_FILTERS, ...projectAnnotations]
+                .filter((value, index, values) => values.indexOf(value) === index)
+                .filter(value => filterSuggestionMatches(value, prefix))
+                .map(value => ({ label: value, value }));
+        }
+
+        function annotationValueContext(tokenValue) {
+            if (!tokenValue) return undefined;
+            const equalsIndex = tokenValue.indexOf('=');
+            if (equalsIndex < 0) return undefined;
+            const key = tokenValue.substring(0, equalsIndex);
+            if (!key.toLocaleLowerCase().includes('.annotation.')) return undefined;
+            let query = tokenValue.substring(equalsIndex + 1);
+            if (query.startsWith('"')) query = query.substring(1);
+            if (query.endsWith('"')) query = query.substring(0, query.length - 1);
+            return { key, query: query.toLocaleLowerCase() };
+        }
+
+        function annotationValueSuggestions(context) {
+            const facetPrefix = context.key.toLocaleLowerCase() + '=';
+            const values = new Set();
+            (state.filterFacets || []).forEach(facet => {
+                facet.forEach(entry => {
+                    if (entry.toLocaleLowerCase().startsWith(facetPrefix)) {
+                        values.add(entry.substring(context.key.length + 1));
+                    }
+                });
+            });
+            return Array.from(values)
+                .filter(value => value.toLocaleLowerCase().includes(context.query))
+                .sort((left, right) => left.localeCompare(right))
+                .map(value => ({
+                    label: value,
+                    value: context.key + '="' + value + '"',
+                }));
+        }
+
+        function filterSuggestionMatches(value, prefix) {
+            const normalized = value.toLocaleLowerCase();
+            if (normalized.startsWith(prefix)) {
+                return true;
+            }
+            if (!prefix.includes('.')) {
+                const tagName = normalized.substring(normalized.lastIndexOf('.') + 1);
+                return ('@' + tagName).startsWith(prefix);
+            }
+            return false;
+        }
+
+        function contextualFilterCount(candidate) {
+            const token = filterTokenAtCursor();
+            if (!token) return 0;
+            const contextValue = filterEl.value.substring(0, token.start)
+                + filterEl.value.substring(token.end);
+            const selectedFilters = contextValue
+                .split(',')
+                .map(value => value.trim())
+                .filter(value => value.startsWith('@'));
+            const requiredFilters = [...selectedFilters, candidate];
+            return (state.filterFacets || []).filter(facet => (
+                requiredFilters.every(value => filterFacetMatches(facet, value))
+            )).length;
+        }
+
+        function filterFacetMatches(facet, value) {
+            const normalized = value.toLocaleLowerCase();
+            return facet.some(entry => {
+                const normalizedEntry = entry.toLocaleLowerCase();
+                if (normalizedEntry === normalized) {
+                    return true;
+                }
+                if (normalized.includes('.annotation.')) {
+                    const equalsIndex = normalized.indexOf('=');
+                    const key = equalsIndex >= 0 ? normalized.substring(0, equalsIndex) : normalized;
+                    if (!normalizedEntry.startsWith(key + '=')) {
+                        return false;
+                    }
+                    if (equalsIndex < 0) {
+                        return true;
+                    }
+                    const expectedValue = normalized.substring(equalsIndex + 1);
+                    const actualValue = normalizedEntry.substring(key.length + 1);
+                    const exact = expectedValue.length >= 2
+                        && expectedValue.startsWith('"')
+                        && expectedValue.endsWith('"');
+                    const expected = exact
+                        ? expectedValue.substring(1, expectedValue.length - 1)
+                        : expectedValue;
+                    return exact ? actualValue === expected : actualValue.includes(expected);
+                }
+                if (!normalized.includes('.')) {
+                    const tagName = normalizedEntry.substring(normalizedEntry.lastIndexOf('.') + 1);
+                    return '@' + tagName === normalized;
+                }
+                return false;
+            });
+        }
+
+        function filterTokenAtCursor() {
+            const value = filterEl.value;
+            const cursor = filterEl.selectionStart ?? value.length;
+            let start = 0;
+            let end = cursor;
+            let inQuotes = false;
+            for (let index = 0; index < cursor; index++) {
+                if (value[index] === '"' && value[index - 1] !== '\\') {
+                    inQuotes = !inQuotes;
+                } else if (!inQuotes && /[\\s(),]/.test(value[index])) {
+                    start = index + 1;
+                }
+            }
+            while (end < value.length) {
+                if (value[end] === '"' && value[end - 1] !== '\\') {
+                    inQuotes = !inQuotes;
+                } else if (!inQuotes && /[\\s(),]/.test(value[end])) {
+                    break;
+                }
+                end++;
+            }
+            return { start, end, value: value.substring(start, cursor) };
+        }
+
+        function applyFilterSuggestion(value) {
+            if (!value) return;
+            const token = filterTokenAtCursor();
+            if (!token) return;
+            const before = filterEl.value.substring(0, token.start);
+            const after = filterEl.value.substring(token.end);
+            filterEl.value = before + value + after;
+            const cursor = before.length + value.length;
+            filterEl.setSelectionRange(cursor, cursor);
+            suppressFilterSuggestions = true;
+            hideFilterSuggestions();
+            clearTimeout(filterTimer);
+            post('applyFilter', { value: filterEl.value });
+            filterEl.focus();
+        }
+
+        function setFilterSuggestionIndex(index) {
+            filterSuggestionIndex = index;
+            filterSuggestionItems.forEach((item, itemIndex) => {
+                const active = itemIndex === index;
+                item.classList.toggle('active', active);
+                item.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            filterSuggestionItems[index]?.scrollIntoView({ block: 'nearest' });
+        }
+
+        function hideFilterSuggestions() {
+            filterSuggestionsEl.hidden = true;
+            filterSuggestionsEl.textContent = '';
+            filterSuggestionItems = [];
+            filterSuggestionIndex = -1;
+        }
+
         function renderSummary() {
             const stats = state.stats || {};
             const total = stats.total || 0;
@@ -783,7 +1124,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 summaryCount('failed', 'Failed', stats.failed || 0),
                 summaryCount('error', 'Errors', stats.error || 0),
                 summaryCount('skipped', 'Skipped', stats.skipped || 0),
-                textSpan('of ' + total + ' tests', 'summary-group'),
+                summaryTotal(total),
             );
             if (state.running) {
                 left.appendChild(textSpan('Running', 'summary-group running-label'));
@@ -794,16 +1135,27 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (duration !== undefined) {
                 right.appendChild(textSpan(formatDuration(duration), 'duration'));
             }
-            right.appendChild(rowAction('codicon-refresh', 'Re-run Failed Tests', () => post('rerunFailed')));
+            const rerunButton = rowAction('codicon-refresh', 'Re-run Failed Tests', () => post('rerunFailed'));
+            right.appendChild(withInternalTooltip(rerunButton, 'rerun-failed', 'Re-run Failed Tests'));
             summaryEl.append(left, right);
         }
 
         function summaryCount(kind, label, value) {
             const item = document.createElement('span');
             item.className = 'summary-count';
-            item.title = label + ': ' + value;
             item.append(iconSpan(statusIcon(kind), kind), textSpan(String(value)));
-            return item;
+            return withInternalTooltip(item, 'summary-' + kind, label + ': ' + value);
+        }
+
+        function summaryTotal(value) {
+            const item = textSpan('of ' + value + ' tests', 'summary-group');
+            return withInternalTooltip(item, 'summary-total', 'Total: ' + value);
+        }
+
+        function withInternalTooltip(element, ownerId, text) {
+            element.addEventListener('mouseenter', () => scheduleNodeTooltip(ownerId, text, element));
+            element.addEventListener('mouseleave', () => hideNodeTooltip(ownerId));
+            return element;
         }
 
         function renderFilterError() {
@@ -879,7 +1231,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const depth = entry.depth;
             const expanded = isExpanded(node.id);
             const hasChildren = Boolean(node.children && node.children.length > 0);
-            const selected = state.selectedId === node.id;
+            const selected = selectedNodeIds.has(node.id);
             const row = document.createElement('div');
             row.id = rowDomId(node.id);
             row.className = 'row' + (selected ? ' selected focused' : '');
@@ -924,7 +1276,17 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
             });
 
-            const status = iconSpan(node.running ? 'codicon-empty' : statusIcon(node.status), 'status ' + (node.running ? 'running' : (node.status || 'unknown')));
+            const virtualInvocations = Boolean(node.hasVirtualInvocations);
+            const statusIconClass = node.running
+                ? 'codicon-empty'
+                : (virtualInvocations ? 'codicon-type-hierarchy-sub' : statusIcon(node.status));
+            const statusClass = node.running
+                ? 'running'
+                : (virtualInvocations ? 'virtual-invocations' : (node.status || 'unknown'));
+            const status = iconSpan(statusIconClass, 'status ' + statusClass);
+            if (virtualInvocations) {
+                status.setAttribute('aria-label', 'Results are in generated test cases');
+            }
             const label = document.createElement('div');
             label.className = 'label';
             const kindIcon = kindIconFor(node.kind);
@@ -940,16 +1302,24 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
             const actions = document.createElement('div');
             actions.className = 'actions';
-            const runButton = rowAction('codicon-run', 'Run Test', () => post('runNode', { id: node.id }), false);
+            const runButton = rowAction('codicon-run', 'Run Test', () => post('runNode', { id: node.id }));
             const copyButton = rowAction('codicon-copy', 'Copy...', (event) => {
                 selectNode(node.id);
                 showCopyMenu(node, event.clientX, event.clientY);
-            }, false);
+            });
             actions.append(runButton, copyButton);
 
             row.append(twisty, status, label, rightMeta, actions);
-            row.addEventListener('click', () => {
+            row.addEventListener('click', (event) => {
                 hideCopyMenu();
+                if (event.ctrlKey || event.metaKey) {
+                    selectNode(node.id, 'toggle');
+                    return;
+                }
+                if (event.shiftKey) {
+                    selectNode(node.id, 'range');
+                    return;
+                }
                 selectNode(node.id);
                 if (hasChildren) {
                     post('setExpanded', { id: node.id, expanded: !expanded });
@@ -962,8 +1332,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             });
             row.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
-                selectNode(node.id);
-                showCopyMenu(node, event.clientX, event.clientY);
+                if (!selectedNodeIds.has(node.id)) {
+                    selectNode(node.id);
+                }
+                showNodeContextMenu(node, event.clientX, event.clientY);
             });
             return row;
         }
@@ -992,7 +1364,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 appendMetaPart(container, stats.failed || 0, 'failed');
                 appendMetaPart(container, stats.error || 0, 'error');
                 appendMetaPart(container, stats.skipped || 0, 'skipped');
-                const total = textSpan(String(stats.total), 'meta-total');
+                const total = textSpan('#' + String(stats.total), 'meta-total');
                 container.appendChild(total);
                 return;
             }
@@ -1005,11 +1377,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (!value) {
                 return;
             }
-            const span = textSpan(String(value) + metaSuffix(kind), 'meta-' + kind);
+            const span = textSpan(metaPrefix(kind) + String(value), 'meta-' + kind);
             container.appendChild(span);
         }
 
-        function metaSuffix(kind) {
+        function metaPrefix(kind) {
             if (kind === 'passed') return '✓';
             if (kind === 'failed') return 'X';
             if (kind === 'error') return '!';
@@ -1017,13 +1389,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             return '';
         }
 
-        function rowAction(iconClass, title, onClick, nativeTitle = true) {
+        function rowAction(iconClass, title, onClick) {
             const button = document.createElement('button');
             button.className = 'icon-button';
             button.type = 'button';
-            if (nativeTitle) {
-                button.title = title;
-            }
             button.setAttribute('aria-label', title);
             button.tabIndex = -1;
             button.appendChild(iconSpan(iconClass));
@@ -1151,7 +1520,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 event.preventDefault();
                 const row = document.getElementById(rowDomId(node.id));
                 const rect = row ? row.getBoundingClientRect() : treeEl.getBoundingClientRect();
-                showCopyMenu(node, rect.left + 24, rect.top + ROW_HEIGHT);
+                showNodeContextMenu(node, rect.left + 24, rect.top + ROW_HEIGHT);
             }
         }
 
@@ -1184,20 +1553,43 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        function selectNode(id) {
-            if (state.selectedId !== id) {
-                state = { ...state, selectedId: id };
-                post('selectNode', { id });
+        function selectNode(id, mode = 'replace') {
+            if (mode === 'toggle') {
+                if (selectedNodeIds.has(id) && selectedNodeIds.size > 1) {
+                    selectedNodeIds.delete(id);
+                } else {
+                    selectedNodeIds.add(id);
+                }
+                selectionAnchorId = id;
+            } else if (mode === 'range' && selectionAnchorId) {
+                const anchorIndex = flatRows.findIndex(entry => entry.node.id === selectionAnchorId);
+                const targetIndex = flatRows.findIndex(entry => entry.node.id === id);
+                if (anchorIndex >= 0 && targetIndex >= 0) {
+                    const start = Math.min(anchorIndex, targetIndex);
+                    const end = Math.max(anchorIndex, targetIndex);
+                    selectedNodeIds = new Set(flatRows.slice(start, end + 1).map(entry => entry.node.id));
+                }
+            } else {
+                selectedNodeIds = new Set([id]);
+                selectionAnchorId = id;
             }
-            updateSelectedRows(id);
+            const activeId = selectedNodeIds.has(id)
+                ? id
+                : Array.from(selectedNodeIds)[selectedNodeIds.size - 1];
+            if (activeId && state.selectedId !== activeId) {
+                state = { ...state, selectedId: activeId };
+                post('selectNode', { id: activeId });
+            }
+            updateSelectedRows();
         }
 
-        function updateSelectedRows(id) {
-            activeGuideParentId = findParentId(state.roots || [], id);
+        function updateSelectedRows() {
+            activeGuideParentId = findParentId(state.roots || [], state.selectedId);
             for (const row of rowsEl.querySelectorAll('.row')) {
-                const selected = row.id === rowDomId(id);
+                const entry = flatRows.find(candidate => row.id === rowDomId(candidate.node.id));
+                const selected = Boolean(entry && selectedNodeIds.has(entry.node.id));
                 row.classList.toggle('selected', selected);
-                row.classList.toggle('focused', selected);
+                row.classList.toggle('focused', Boolean(entry && entry.node.id === state.selectedId));
                 row.setAttribute('aria-selected', selected ? 'true' : 'false');
             }
             updateIndentGuides();
@@ -1226,35 +1618,133 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function showCopyMenu(node, x, y) {
             hideNodeTooltip();
+            hideCopyMenu();
             menuNode = node;
-            copyMenuEl.textContent = '';
-            menuItems = copyOptions(node).map(([kind, label], index) => {
-                const item = document.createElement('button');
-                item.className = 'menu-item';
-                item.type = 'button';
-                item.setAttribute('role', 'menuitem');
-                item.tabIndex = -1;
-                item.append(iconSpan('codicon-copy'), textSpan(label));
-                item.addEventListener('mouseenter', () => setMenuIndex(index));
+            menuItems = renderCopyItems(copyMenuEl, node, false);
+            if (menuItems.length === 0) {
+                return;
+            }
+            positionMenu(copyMenuEl, x, y);
+            setMenuIndex(0);
+            copyMenuEl.addEventListener('keydown', handleMenuKeydown);
+            menuItems[0].focus();
+        }
+
+        function showNodeContextMenu(node, x, y) {
+            hideNodeTooltip();
+            hideCopyMenu();
+            menuNode = node;
+            const runIds = selectedNodeIds.has(node.id)
+                ? Array.from(selectedNodeIds)
+                : [node.id];
+            const runItem = menuItem('codicon-run', runIds.length > 1 ? 'Run Tests' : 'Run Test');
+            runItem.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (runIds.length > 1) {
+                    post('runNodes', { ids: runIds });
+                } else {
+                    post('runNode', { id: runIds[0] });
+                }
+                hideCopyMenu();
+            });
+            copyMenuEl.appendChild(runItem);
+            menuItems.push(runItem);
+            if (canGoToTest(node)) {
+                appendMenuSeparator(copyMenuEl);
+                const goToItem = menuItem('codicon-go-to-file', 'Go to Test');
+                goToItem.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    post('openNode', { id: node.id });
+                    hideCopyMenu();
+                });
+                copyMenuEl.appendChild(goToItem);
+                menuItems.push(goToItem);
+            }
+            if (copyOptions(node).length > 0) {
+                appendMenuSeparator(copyMenuEl);
+                const copyItem = menuItem('codicon-copy', 'Copy...');
+                copyItem.appendChild(iconSpan('codicon-chevron-right', 'menu-chevron'));
+                copyItem.addEventListener('mouseenter', () => showCopySubmenu(node, copyItem));
+                copyItem.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    showCopySubmenu(node, copyItem);
+                    setSubmenuIndex(0);
+                });
+                copyMenuEl.appendChild(copyItem);
+                menuItems.push(copyItem);
+                submenuTrigger = copyItem;
+            }
+            menuItems.forEach((item, index) => {
+                item.addEventListener('mouseenter', () => {
+                    setMenuIndex(index);
+                    if (item !== submenuTrigger) hideCopySubmenu();
+                });
+            });
+            if (menuItems.length === 0) return;
+            positionMenu(copyMenuEl, x, y);
+            setMenuIndex(0);
+            copyMenuEl.addEventListener('keydown', handleMenuKeydown);
+            menuItems[0].focus();
+        }
+
+        function showCopySubmenu(node, anchorEl) {
+            hideCopySubmenu();
+            copySubmenuEl.textContent = '';
+            submenuItems = renderCopyItems(copySubmenuEl, node, true);
+            if (submenuItems.length === 0) return;
+            copySubmenuEl.hidden = false;
+            const anchor = anchorEl.getBoundingClientRect();
+            const menuWidth = copySubmenuEl.offsetWidth;
+            const preferredLeft = anchor.right + 2;
+            const left = preferredLeft + menuWidth <= window.innerWidth - 4
+                ? preferredLeft
+                : anchor.left - menuWidth - 2;
+            const maxTop = window.innerHeight - copySubmenuEl.offsetHeight - 4;
+            copySubmenuEl.style.left = Math.max(4, left) + 'px';
+            copySubmenuEl.style.top = Math.max(4, Math.min(anchor.top - 4, maxTop)) + 'px';
+            copySubmenuEl.addEventListener('keydown', handleSubmenuKeydown);
+        }
+
+        function renderCopyItems(container, node, isSubmenu) {
+            return copyOptions(node).map(([kind, label], index) => {
+                const item = menuItem('codicon-copy', label);
+                item.addEventListener('mouseenter', () => {
+                    if (isSubmenu) setSubmenuIndex(index);
+                    else setMenuIndex(index);
+                });
                 item.addEventListener('click', (event) => {
                     event.stopPropagation();
                     post('copy', { id: node.id, kind });
                     hideCopyMenu();
                 });
-                copyMenuEl.appendChild(item);
+                container.appendChild(item);
                 return item;
             });
-            if (menuItems.length === 0) {
-                return;
-            }
-            copyMenuEl.hidden = false;
-            const maxLeft = window.innerWidth - copyMenuEl.offsetWidth - 4;
-            const maxTop = window.innerHeight - copyMenuEl.offsetHeight - 4;
-            copyMenuEl.style.left = Math.max(4, Math.min(x, maxLeft)) + 'px';
-            copyMenuEl.style.top = Math.max(4, Math.min(y, maxTop)) + 'px';
-            setMenuIndex(0);
-            copyMenuEl.addEventListener('keydown', handleMenuKeydown);
-            menuItems[0].focus();
+        }
+
+        function menuItem(iconClass, label) {
+            const item = document.createElement('button');
+            item.className = 'menu-item';
+            item.type = 'button';
+            item.setAttribute('role', 'menuitem');
+            item.tabIndex = -1;
+            item.append(iconSpan(iconClass), textSpan(label));
+            return item;
+        }
+
+        function appendMenuSeparator(container) {
+            const separator = document.createElement('div');
+            separator.className = 'menu-separator';
+            separator.setAttribute('role', 'separator');
+            container.appendChild(separator);
+        }
+
+        function positionMenu(element, x, y) {
+            element.hidden = false;
+            const maxLeft = window.innerWidth - element.offsetWidth - 4;
+            const maxTop = window.innerHeight - element.offsetHeight - 4;
+            element.style.left = Math.max(4, Math.min(x, maxLeft)) + 'px';
+            element.style.top = Math.max(4, Math.min(y, maxTop)) + 'px';
         }
 
         function handleMenuKeydown(event) {
@@ -1268,9 +1758,30 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 setMenuIndex((menuIndex - 1 + menuItems.length) % menuItems.length);
+            } else if (event.key === 'ArrowRight' && menuItems[menuIndex] === submenuTrigger) {
+                event.preventDefault();
+                showCopySubmenu(menuNode, submenuTrigger);
+                setSubmenuIndex(0);
             } else if ((event.key === 'Enter' || event.key === ' ') && menuItems[menuIndex]) {
                 event.preventDefault();
                 menuItems[menuIndex].click();
+            }
+        }
+
+        function handleSubmenuKeydown(event) {
+            if (event.key === 'Escape' || event.key === 'ArrowLeft') {
+                event.preventDefault();
+                hideCopySubmenu();
+                submenuTrigger?.focus();
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setSubmenuIndex((submenuIndex + 1) % submenuItems.length);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setSubmenuIndex((submenuIndex - 1 + submenuItems.length) % submenuItems.length);
+            } else if ((event.key === 'Enter' || event.key === ' ') && submenuItems[submenuIndex]) {
+                event.preventDefault();
+                submenuItems[submenuIndex].click();
             }
         }
 
@@ -1283,13 +1794,32 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             menuItems[menuIndex]?.focus();
         }
 
+        function setSubmenuIndex(index) {
+            submenuIndex = index;
+            submenuItems.forEach((item, itemIndex) => {
+                item.classList.toggle('active', itemIndex === submenuIndex);
+                item.tabIndex = itemIndex === submenuIndex ? 0 : -1;
+            });
+            submenuItems[submenuIndex]?.focus();
+        }
+
+        function hideCopySubmenu() {
+            copySubmenuEl.hidden = true;
+            copySubmenuEl.textContent = '';
+            copySubmenuEl.removeEventListener('keydown', handleSubmenuKeydown);
+            submenuItems = [];
+            submenuIndex = -1;
+        }
+
         function hideCopyMenu() {
+            hideCopySubmenu();
             copyMenuEl.hidden = true;
             copyMenuEl.textContent = '';
             copyMenuEl.removeEventListener('keydown', handleMenuKeydown);
             menuItems = [];
             menuIndex = -1;
             menuNode = null;
+            submenuTrigger = null;
         }
 
         function copyOptions(node) {
@@ -1309,6 +1839,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (kind === 'file') return Boolean(node.sourcePath);
             if (kind === 'method') return Boolean(node.methodName);
             return true;
+        }
+
+        function canGoToTest(node) {
+            return Boolean(node.sourcePath)
+                && (node.kind === 'class' || node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle');
         }
 
         function isLeafSourceMethod(node) {
@@ -1393,11 +1928,15 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function titleFor(node) {
             const stats = statsForTooltip(node);
             const duration = totalDurationForNode(node);
-            return [
+            const lines = [
                 fullNameForTooltip(node),
                 'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
                 'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
-            ].join(TOOLTIP_LINE_BREAK);
+            ];
+            if (node.hasVirtualInvocations) {
+                lines.push('Results are in generated test cases');
+            }
+            return lines.join(TOOLTIP_LINE_BREAK);
         }
 
         function fullNameForTooltip(node) {
@@ -1438,6 +1977,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 interface WebviewMessage {
     type: string;
     id?: string;
+    ids?: string[];
     value?: string;
     expanded?: boolean;
     kind?: string;

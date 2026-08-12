@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { XMLParser } from 'fast-xml-parser';
 import { POM_GLOB } from './constants';
 
 export interface MavenModule {
@@ -9,8 +10,8 @@ export interface MavenModule {
     readonly artifactId: string;
 }
 
-const ARTIFACT_ID_PATTERN = /<artifactId>\s*([^<\s]+)\s*<\/artifactId>/;
 const TARGET_SEGMENT = `${path.sep}target${path.sep}`;
+const POM_PARSER = new XMLParser({ ignoreAttributes: false, trimValues: true });
 
 /**
  * Finds all Maven modules in the given workspace folder by locating pom.xml files.
@@ -56,8 +57,10 @@ export async function findMavenModules(workspaceFolder: vscode.WorkspaceFolder):
 function extractArtifactId(pomPath: string): string | undefined {
     try {
         const content = fs.readFileSync(pomPath, 'utf8');
-        const match = ARTIFACT_ID_PATTERN.exec(content);
-        return match?.[1];
+        const parsed = POM_PARSER.parse(content) as { project?: { artifactId?: unknown } };
+        return typeof parsed.project?.artifactId === 'string'
+            ? parsed.project.artifactId
+            : undefined;
     } catch {
         return undefined;
     }

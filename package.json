@@ -43,6 +43,36 @@
         "icon": "$(run-all)"
       },
       {
+        "command": "mavenTestExplorer.expandAll",
+        "title": "Expand All",
+        "category": "Maven Test Explorer",
+        "icon": "$(expand-all)"
+      },
+      {
+        "command": "mavenTestExplorer.collapseAll",
+        "title": "Collapse All",
+        "category": "Maven Test Explorer",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "mavenTestExplorer.sortByLocation",
+        "title": "Sort by Location",
+        "category": "Maven Test Explorer",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "mavenTestExplorer.sortByStatus",
+        "title": "Sort by Status",
+        "category": "Maven Test Explorer",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "mavenTestExplorer.sortByDuration",
+        "title": "Sort by Duration",
+        "category": "Maven Test Explorer",
+        "icon": "$(watch)"
+      },
+      {
         "command": "mavenTestExplorer.rerunFailed",
         "title": "Maven: Re-run Failed Tests",
         "category": "Maven Test Explorer"
@@ -106,18 +136,6 @@
         "icon": "$(history)"
       },
       {
-        "command": "mavenTestExplorer.applyFilter",
-        "title": "Maven: Advanced Filter (AND / OR)",
-        "category": "Maven Test Explorer",
-        "icon": "$(filter)"
-      },
-      {
-        "command": "mavenTestExplorer.clearFilter",
-        "title": "Maven: Clear Test Filter Expression",
-        "category": "Maven Test Explorer",
-        "icon": "$(filter-filled)"
-      },
-      {
         "command": "mavenTestExplorer.attachToCopilot",
         "title": "Attach to Copilot Chat",
         "category": "Maven Test Explorer",
@@ -144,33 +162,78 @@
       "view/title": [
         {
           "command": "mavenTestExplorer.refreshTests",
-          "group": "navigation",
+          "group": "navigation@1",
           "when": "view == mavenTestExplorer.view"
         },
         {
           "command": "mavenTestExplorer.runAllTests",
-          "group": "navigation",
+          "group": "navigation@2",
           "when": "view == mavenTestExplorer.view"
         },
         {
+          "command": "mavenTestExplorer.expandAll",
+          "group": "navigation@3",
+          "when": "view == mavenTestExplorer.view && !mavenTestExplorer.hasExpandedItems"
+        },
+        {
+          "command": "mavenTestExplorer.collapseAll",
+          "group": "navigation@3",
+          "when": "view == mavenTestExplorer.view && mavenTestExplorer.hasExpandedItems"
+        },
+        {
           "command": "mavenTestExplorer.clearResults",
-          "group": "navigation",
+          "group": "navigation@5",
           "when": "view == mavenTestExplorer.view"
         },
         {
           "command": "mavenTestExplorer.clearResultsAndHistory",
-          "group": "overflow",
+          "group": "navigation@6",
           "when": "view == mavenTestExplorer.view"
+        },
+        {
+          "command": "mavenTestExplorer.sortByLocation",
+          "group": "navigation@7",
+          "when": "view == mavenTestExplorer.view",
+          "toggled": "mavenTestExplorer.sortMode == location"
+        },
+        {
+          "command": "mavenTestExplorer.sortByStatus",
+          "group": "navigation@8",
+          "when": "view == mavenTestExplorer.view",
+          "toggled": "mavenTestExplorer.sortMode == status"
+        },
+        {
+          "command": "mavenTestExplorer.sortByDuration",
+          "group": "navigation@9",
+          "when": "view == mavenTestExplorer.view",
+          "toggled": "mavenTestExplorer.sortMode == duration"
         },
         {
           "command": "mavenTestExplorer.showHistory",
-          "group": "navigation",
+          "group": "navigation@4",
           "when": "view == mavenTestExplorer.view"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mavenTestExplorer.expandAll",
+          "when": "false"
         },
         {
-          "command": "mavenTestExplorer.applyFilter",
-          "group": "navigation",
-          "when": "view == mavenTestExplorer.view"
+          "command": "mavenTestExplorer.collapseAll",
+          "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.sortByLocation",
+          "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.sortByStatus",
+          "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.sortByDuration",
+          "when": "false"
         }
       ]
     },

@@ -1,11 +1,12 @@
 import * as path from 'path';
 import { MavenModule } from './mavenProjectDetector';
-import { buildFqcn, TestClassInfo } from './javaTestScanner';
+import { buildFqcn, SourceAnnotation, TestClassInfo } from './javaTestScanner';
 import { SuiteResult, TestCaseResult, TestCaseStatus } from './surefireParser';
 import { parseFilterExpression, TestFilterExpression } from './filterExpression';
 
 export type CustomNodeKind = 'module' | 'package' | 'class' | 'method' | 'virtualMethod' | 'lifecycle';
 export type CustomNodeStatus = TestCaseStatus | 'unknown';
+export type CustomSortMode = 'location' | 'status' | 'duration';
 
 export interface CustomNodeStats {
     passed: number;
@@ -32,12 +33,14 @@ export interface CustomTestNode {
     line?: number;
     tags: string[];
     annotations: string[];
+    sourceAnnotations: SourceAnnotation[];
     status: CustomNodeStatus;
     running?: boolean;
     stats: CustomNodeStats;
     durationMs?: number;
     isVirtual?: boolean;
     virtualParentId?: string;
+    hasVirtualInvocations?: boolean;
     failureMessage?: string;
     failureType?: string;
     stackTrace?: string;
@@ -59,6 +62,7 @@ export interface ModuleClasses {
 export interface CustomTreeRuntimeState {
     readonly runningNodeIds?: ReadonlySet<string>;
     readonly suiteResults?: readonly SuiteResult[];
+    readonly sortMode?: CustomSortMode;
 }
 
 const EMPTY_STATS: CustomNodeStats = { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 };
@@ -118,7 +122,11 @@ export function buildCustomTree(
                     className: cls.className,
                     sourcePath: cls.filePath,
                     tags: [...cls.tags],
-                    annotations: cls.tags.map((tag) => `@Tag("${tag}")`),
+                    annotations: [
+                        ...cls.tags.map((tag) => `@Tag("${tag}")`),
+                        ...cls.annotations.map(formatSourceAnnotation),
+                    ],
+                    sourceAnnotations: [...cls.annotations],
                 });
                 classNodesByName.set(cls.className, classNode);
                 nodesById.set(classNode.id, classNode);
@@ -130,6 +138,7 @@ export function buildCustomTree(
                 const classNode = classNodesByName.get(cls.className)!;
                 for (const method of cls.methods) {
                     const tags = unique([...cls.tags, ...method.tags]);
+                    const sourceAnnotations = uniqueSourceAnnotations([...cls.annotations, ...method.annotations]);
                     const methodNode = createNode({
                         id: methodId(module, fqcn, method.name),
                         kind: 'method',
@@ -144,7 +153,11 @@ export function buildCustomTree(
                         sourcePath: cls.filePath,
                         line: method.line,
                         tags,
-                        annotations: tags.map((tag) => `@Tag("${tag}")`),
+                        annotations: [
+                            ...tags.map((tag) => `@Tag("${tag}")`),
+                            ...sourceAnnotations.map(formatSourceAnnotation),
+                        ],
+                        sourceAnnotations,
                     });
                     classNode.children.push(methodNode);
                     nodesById.set(methodNode.id, methodNode);
@@ -169,10 +182,10 @@ export function buildCustomTree(
 
     materializeResults(suiteResults, modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
     const completedRuntimeNodeIds = materializeResults(runtimeState?.suiteResults ?? [], modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
-    for (const root of roots) {
-        organizeChildren(root);
-    }
     rollupAll(roots);
+    for (const root of roots) {
+        organizeChildren(root, runtimeState?.sortMode ?? 'location');
+    }
     applyRunningState(roots, runtimeState?.runningNodeIds, completedRuntimeNodeIds);
 
     const filter = (filterText ?? '').trim();
@@ -260,6 +273,9 @@ function materializeResults(
             const parentMethodName = staticMethodName(tc.methodName);
             const parentMethod = methodByFqcnAndName.get(`${tc.className}#${parentMethodName}`);
             const kind: CustomNodeKind = tc.methodName.startsWith('@') ? 'lifecycle' : 'virtualMethod';
+            if (parentMethod && kind === 'virtualMethod') {
+                parentMethod.hasVirtualInvocations = true;
+            }
             const virtualId = `${classNode.id}#${encodeURIComponent(tc.methodName)}`;
             let node = nodesById.get(virtualId);
             if (!node) {
@@ -278,6 +294,7 @@ function materializeResults(
                     line: parentMethod?.line ?? classNode.line,
                     tags: parentMethod?.tags ?? classNode.tags,
                     annotations: parentMethod?.annotations ?? classNode.annotations,
+                    sourceAnnotations: parentMethod?.sourceAnnotations ?? classNode.sourceAnnotations,
                     isVirtual: kind === 'virtualMethod',
                     virtualParentId: parentMethod?.id,
                 });
@@ -363,7 +380,18 @@ function matchesTerm(node: CustomTestNode, rawTerm: string): boolean {
         const normalized = normalizeTag(term.substring(1));
         const tags = new Set(node.tags.map(normalizeTag));
         const statusTags = statusAliases(node.status);
-        return tags.has(normalized) || statusTags.has(normalized);
+        if (statusTags.has(normalized)) {
+            return true;
+        }
+        const namespacePrefix = `${path.basename(node.moduleDir).toLocaleLowerCase()}.`;
+        const annotationPrefix = `${namespacePrefix}annotation.`;
+        if (normalized.startsWith(annotationPrefix)) {
+            return matchesAnnotationFilter(node.sourceAnnotations, normalized.substring(annotationPrefix.length));
+        }
+        const tagName = normalized.startsWith(namespacePrefix)
+            ? normalized.substring(namespacePrefix.length)
+            : normalized;
+        return tags.has(tagName);
     }
     const needle = term.toLocaleLowerCase();
     return [
@@ -464,6 +492,7 @@ function createNode(args: {
     line?: number;
     tags?: string[];
     annotations?: string[];
+    sourceAnnotations?: SourceAnnotation[];
     isVirtual?: boolean;
     virtualParentId?: string;
 }): CustomTestNode {
@@ -484,6 +513,7 @@ function createNode(args: {
         line: args.line,
         tags: unique(args.tags ?? []),
         annotations: unique(args.annotations ?? []),
+        sourceAnnotations: [...(args.sourceAnnotations ?? [])],
         status: 'unknown',
         stats: { ...EMPTY_STATS },
         isVirtual: args.isVirtual,
@@ -550,14 +580,14 @@ function directParentClassName(className: string): string | undefined {
     return className.substring(0, index);
 }
 
-function organizeChildren(node: CustomTestNode): void {
+function organizeChildren(node: CustomTestNode, sortMode: CustomSortMode = 'location'): void {
     const indexed = node.children.map((child, index) => ({ child, index }));
     indexed.sort((a, b) => {
         const groupDelta = childGroup(a.child) - childGroup(b.child);
         if (groupDelta !== 0) {
             return groupDelta;
         }
-        const nameDelta = compareSiblingNodes(a.child, b.child);
+        const nameDelta = compareSiblingNodes(a.child, b.child, sortMode);
         if (nameDelta !== 0) {
             return nameDelta;
         }
@@ -565,7 +595,7 @@ function organizeChildren(node: CustomTestNode): void {
     });
     node.children = indexed.map((entry) => entry.child);
     for (const child of node.children) {
-        organizeChildren(child);
+        organizeChildren(child, sortMode);
     }
 }
 
@@ -576,7 +606,18 @@ function childGroup(node: CustomTestNode): number {
     return 1;
 }
 
-function compareSiblingNodes(a: CustomTestNode, b: CustomTestNode): number {
+function compareSiblingNodes(a: CustomTestNode, b: CustomTestNode, sortMode: CustomSortMode): number {
+    if (sortMode === 'status') {
+        const statusDelta = statusSortRank(a.status) - statusSortRank(b.status);
+        if (statusDelta !== 0) {
+            return statusDelta;
+        }
+    } else if (sortMode === 'duration') {
+        const durationDelta = nodeDuration(b) - nodeDuration(a);
+        if (durationDelta !== 0) {
+            return durationDelta;
+        }
+    }
     if (a.kind === 'method' && b.kind === 'method' && a.line !== undefined && b.line !== undefined) {
         return a.line - b.line;
     }
@@ -584,6 +625,21 @@ function compareSiblingNodes(a: CustomTestNode, b: CustomTestNode): number {
         return nodeSortKey(a).localeCompare(nodeSortKey(b));
     }
     return 0;
+}
+
+function statusSortRank(status: CustomNodeStatus): number {
+    if (status === 'error') { return 0; }
+    if (status === 'failed') { return 1; }
+    if (status === 'skipped') { return 2; }
+    if (status === 'passed') { return 3; }
+    return 4;
+}
+
+function nodeDuration(node: CustomTestNode): number {
+    if (typeof node.durationMs === 'number') {
+        return node.durationMs;
+    }
+    return node.children.reduce((total, child) => total + nodeDuration(child), 0);
 }
 
 function nodeSortKey(node: CustomTestNode): string {
@@ -605,6 +661,7 @@ function statusAliases(status: CustomNodeStatus): Set<string> {
     aliases.add(`status.${status}`);
     aliases.add(status);
     aliases.add(`maventestexplorer:status.${status}`);
+    aliases.add('executed');
     if (status === 'error') {
         aliases.add('status.failed');
         aliases.add('failed');
@@ -635,4 +692,36 @@ function methodId(module: MavenModule, fqcn: string, methodName: string): string
 
 function unique(values: readonly string[]): string[] {
     return Array.from(new Set(values.filter((value) => value.length > 0)));
+}
+
+function uniqueSourceAnnotations(values: readonly SourceAnnotation[]): SourceAnnotation[] {
+    const seen = new Set<string>();
+    return values.filter((annotation) => {
+        const key = `${annotation.name}\0${annotation.value}`;
+        if (seen.has(key)) { return false; }
+        seen.add(key);
+        return true;
+    });
+}
+
+function formatSourceAnnotation(annotation: SourceAnnotation): string {
+    return `@${annotation.name}("${annotation.value}")`;
+}
+
+function matchesAnnotationFilter(annotations: readonly SourceAnnotation[], expression: string): boolean {
+    const equalsIndex = expression.indexOf('=');
+    const name = (equalsIndex >= 0 ? expression.substring(0, equalsIndex) : expression).trim();
+    const rawValue = equalsIndex >= 0 ? expression.substring(equalsIndex + 1).trim() : undefined;
+    return annotations.some((annotation) => {
+        if (annotation.name.toLocaleLowerCase() !== name) {
+            return false;
+        }
+        if (rawValue === undefined || rawValue.length === 0) {
+            return true;
+        }
+        const exact = rawValue.length >= 2 && rawValue.startsWith('"') && rawValue.endsWith('"');
+        const expected = (exact ? rawValue.substring(1, rawValue.length - 1) : rawValue).toLocaleLowerCase();
+        const actual = annotation.value.toLocaleLowerCase();
+        return exact ? actual === expected : actual.includes(expected);
+    });
 }

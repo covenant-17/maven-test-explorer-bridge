@@ -28,6 +28,11 @@ export const DEFAULT_STATS_FORMAT = '| ✓{passed} | ✗{failed} | ⭾ {skipped}
 // Command IDs
 export const CMD_REFRESH_TESTS = 'mavenTestExplorer.refreshTests';
 export const CMD_RUN_ALL_TESTS = 'mavenTestExplorer.runAllTests';
+export const CMD_EXPAND_ALL = 'mavenTestExplorer.expandAll';
+export const CMD_COLLAPSE_ALL = 'mavenTestExplorer.collapseAll';
+export const CMD_SORT_BY_LOCATION = 'mavenTestExplorer.sortByLocation';
+export const CMD_SORT_BY_STATUS = 'mavenTestExplorer.sortByStatus';
+export const CMD_SORT_BY_DURATION = 'mavenTestExplorer.sortByDuration';
 export const CMD_RERUN_FAILED = 'mavenTestExplorer.rerunFailed';
 export const CMD_CLEAN_REPORTS = 'mavenTestExplorer.cleanReports';
 export const CMD_COPY_MAVEN_COMMAND = 'mavenTestExplorer.copyMavenCommand';
@@ -42,8 +47,6 @@ export const CMD_CLEAR_RESULTS_AND_HISTORY = 'mavenTestExplorer.clearResultsAndH
 export const CMD_SHOW_HISTORY = 'mavenTestExplorer.showHistory';
 export const CMD_ATTACH_TO_COPILOT = 'mavenTestExplorer.attachToCopilot';
 export const CMD_ATTACH_TO_CLAUDE = 'mavenTestExplorer.attachToClaude';
-export const CMD_APPLY_FILTER = 'mavenTestExplorer.applyFilter';
-export const CMD_CLEAR_FILTER = 'mavenTestExplorer.clearFilter';
 
 // Glob patterns
 export const POM_GLOB = '**/pom.xml';
