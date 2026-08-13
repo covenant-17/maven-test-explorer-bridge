@@ -54,6 +54,7 @@ export function publishResults(
             for (const tc of suite.testCases) {
                 const item = reportTestCase(run, treeBuilder, tc, outputChannel, invocationCounts);
                 if (item) { resolvedItemIds.add(item.id); }
+                if (tc.synthetic) { continue; }
                 switch (tc.status) {
                     case 'passed':  totalPassed++;  break;
                     case 'failed':  totalFailed++;  break;

@@ -18,7 +18,7 @@ export interface MavenRunResult {
  */
 // Surefire per-class summary line, e.g.:
 //   Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 30.5 s -- in tests.MyTest
-const SUREFIRE_CLASS_SUMMARY = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)/;
+const SUREFIRE_CLASS_SUMMARY = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+).*-- in\s+\S+/;
 
 export function runMaven(
     cwd: string,

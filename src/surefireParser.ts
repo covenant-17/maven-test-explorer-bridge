@@ -13,6 +13,8 @@ export interface TestCaseResult {
     readonly stackTrace: string | undefined;
     readonly systemOut: string | undefined;
     readonly systemErr: string | undefined;
+    /** UI-only placeholder for a test Maven did not execute after a lifecycle failure. */
+    readonly synthetic?: boolean;
 }
 
 export interface SuiteResult {

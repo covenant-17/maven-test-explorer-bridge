@@ -32,6 +32,7 @@ export interface CustomTestNode {
     methodName?: string;
     sourcePath?: string;
     line?: number;
+    inheritedFrom?: string;
     tags: string[];
     annotations: string[];
     sourceAnnotations: SourceAnnotation[];
@@ -42,6 +43,7 @@ export interface CustomTestNode {
     isVirtual?: boolean;
     virtualParentId?: string;
     hasVirtualInvocations?: boolean;
+    counted?: boolean;
     failureMessage?: string;
     failureType?: string;
     stackTrace?: string;
@@ -123,6 +125,7 @@ export function buildCustomTree(
                     fqcn,
                     className: cls.className,
                     sourcePath: cls.filePath,
+                    line: cls.line,
                     tags: [...cls.tags],
                     annotations: [
                         ...cls.tags.map((tag) => `@Tag("${tag}")`),
@@ -152,8 +155,9 @@ export function buildCustomTree(
                         fqcn,
                         className: cls.className,
                         methodName: method.name,
-                        sourcePath: cls.filePath,
+                        sourcePath: method.sourcePath ?? cls.filePath,
                         line: method.line,
+                        inheritedFrom: method.inheritedFrom,
                         tags,
                         annotations: [
                             ...tags.map((tag) => `@Tag("${tag}")`),
@@ -184,7 +188,7 @@ export function buildCustomTree(
 
     materializeResults(suiteResults, modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
     const completedRuntimeNodeIds = materializeResults(runtimeState?.suiteResults ?? [], modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
-    rollupAll(roots);
+    rollupAll(roots, runtimeState?.runningNodeIds);
     for (const root of roots) {
         organizeChildren(
             root,
@@ -258,6 +262,12 @@ function materializeResults(
 ): Set<string> {
     const resolvedNodeIds = new Set<string>();
     for (const suite of suiteResults) {
+        const occurrenceTotals = new Map<string, number>();
+        const occurrenceIndexes = new Map<string, number>();
+        for (const tc of suite.testCases) {
+            const key = `${tc.className}#${tc.methodName}`;
+            occurrenceTotals.set(key, (occurrenceTotals.get(key) ?? 0) + 1);
+        }
         for (const tc of suite.testCases) {
             const module = findModuleForResult(tc, suite, modulesWithClasses, moduleByDir);
             if (!module) {
@@ -269,10 +279,47 @@ function materializeResults(
             }
             addSubtreeIds(resolvedNodeIds, classNode);
 
-            const exactMethod = methodByFqcnAndName.get(`${tc.className}#${tc.methodName}`);
-            if (exactMethod) {
+            const exactKey = `${tc.className}#${tc.methodName}`;
+            const exactMethod = methodByFqcnAndName.get(exactKey);
+            const occurrenceTotal = occurrenceTotals.get(exactKey) ?? 1;
+            if (exactMethod && occurrenceTotal === 1) {
                 applyCaseResult(exactMethod, tc);
                 resolvedNodeIds.add(exactMethod.id);
+                continue;
+            }
+
+            if (exactMethod) {
+                exactMethod.hasVirtualInvocations = true;
+                const occurrenceIndex = (occurrenceIndexes.get(exactKey) ?? 0) + 1;
+                occurrenceIndexes.set(exactKey, occurrenceIndex);
+                const effectiveName = `${tc.methodName}[${occurrenceIndex}]`;
+                const virtualId = `${exactMethod.id}/invocation:${encodeURIComponent(effectiveName)}`;
+                let invocationNode = nodesById.get(virtualId);
+                if (!invocationNode) {
+                    invocationNode = createNode({
+                        id: virtualId,
+                        kind: 'virtualMethod',
+                        label: `${effectiveName}()`,
+                        description: 'dynamic invocation; opens parent',
+                        parentId: exactMethod.id,
+                        module,
+                        packageName: exactMethod.packageName,
+                        fqcn: tc.className,
+                        className: exactMethod.className,
+                        methodName: effectiveName,
+                        sourcePath: exactMethod.sourcePath,
+                        line: exactMethod.line,
+                        tags: exactMethod.tags,
+                        annotations: exactMethod.annotations,
+                        sourceAnnotations: exactMethod.sourceAnnotations,
+                        isVirtual: true,
+                        virtualParentId: exactMethod.id,
+                    });
+                    exactMethod.children.push(invocationNode);
+                    nodesById.set(invocationNode.id, invocationNode);
+                }
+                applyCaseResult(invocationNode, tc);
+                resolvedNodeIds.add(invocationNode.id);
                 continue;
             }
 
@@ -413,19 +460,26 @@ function matchesTerm(node: CustomTestNode, rawTerm: string): boolean {
     ].some((value) => value.toLocaleLowerCase().includes(needle));
 }
 
-function rollupAll(nodes: readonly CustomTestNode[]): void {
+function rollupAll(nodes: readonly CustomTestNode[], expectedNodeIds?: ReadonlySet<string>): void {
     for (const node of nodes) {
-        rollup(node);
+        rollup(node, expectedNodeIds);
     }
 }
 
-function rollup(node: CustomTestNode): CustomNodeStats {
+function rollup(node: CustomTestNode, expectedNodeIds?: ReadonlySet<string>): CustomNodeStats {
     if (node.children.length === 0) {
-        node.stats = leafStats(node.status);
+        node.stats = node.counted === false ? { ...EMPTY_STATS } : leafStats(node.status);
+        if (node.stats.total === 0
+            && node.counted !== false
+            && expectedNodeIds?.has(node.id)
+            && (node.kind === 'method' || node.kind === 'virtualMethod')
+            && !node.hasVirtualInvocations) {
+            node.stats.total = 1;
+        }
         return node.stats;
     }
     for (const child of node.children) {
-        rollup(child);
+        rollup(child, expectedNodeIds);
     }
     node.stats = sumStats(node.children.map((child) => child.stats));
     node.status = aggregateStatus(node.stats);
@@ -440,7 +494,12 @@ function applyRunningState(
     let anyRunning = false;
     for (const node of nodes) {
         const childRunning = applyRunningState(node.children, runningNodeIds, completedRuntimeNodeIds);
-        const selfRunning = Boolean(runningNodeIds?.has(node.id)) && !completedRuntimeNodeIds.has(node.id);
+        // Container nodes derive their state from unfinished descendants. Their own IDs are
+        // included in a subtree run only to describe its scope; treating those IDs as active
+        // would leave a package/module spinner visible after its last class report arrived.
+        const selfRunning = node.children.length === 0
+            && Boolean(runningNodeIds?.has(node.id))
+            && !completedRuntimeNodeIds.has(node.id);
         node.running = selfRunning || childRunning;
         anyRunning = anyRunning || Boolean(node.running);
     }
@@ -453,7 +512,8 @@ function applyCaseResult(node: CustomTestNode, tc: TestCaseResult): void {
     node.failureMessage = tc.failureMessage;
     node.failureType = tc.failureType;
     node.stackTrace = tc.stackTrace;
-    node.stats = leafStats(tc.status);
+    node.counted = !tc.synthetic;
+    node.stats = tc.synthetic ? { ...EMPTY_STATS } : leafStats(tc.status);
 }
 
 function leafStats(status: CustomNodeStatus): CustomNodeStats {
@@ -496,6 +556,7 @@ function createNode(args: {
     methodName?: string;
     sourcePath?: string;
     line?: number;
+    inheritedFrom?: string;
     tags?: string[];
     annotations?: string[];
     sourceAnnotations?: SourceAnnotation[];
@@ -517,6 +578,7 @@ function createNode(args: {
         methodName: args.methodName,
         sourcePath: args.sourcePath,
         line: args.line,
+        inheritedFrom: args.inheritedFrom,
         tags: unique(args.tags ?? []),
         annotations: unique(args.annotations ?? []),
         sourceAnnotations: [...(args.sourceAnnotations ?? [])],
@@ -537,17 +599,17 @@ function findModuleForResult(
     modulesWithClasses: readonly ModuleClasses[],
     moduleByDir: ReadonlyMap<string, MavenModule>,
 ): MavenModule | undefined {
-    for (const { module, classes } of modulesWithClasses) {
-        if (classes.some((cls) => buildFqcn(cls.packageName, cls.className) === tc.className)) {
-            return module;
-        }
-    }
     for (const [moduleDir, module] of moduleByDir) {
         if (suite.xmlPath.startsWith(moduleDir + path.sep) || suite.xmlPath.startsWith(moduleDir + '/')) {
             return module;
         }
     }
-    return modulesWithClasses[0]?.module;
+    for (const { module, classes } of modulesWithClasses) {
+        if (classes.some((cls) => buildFqcn(cls.packageName, cls.className) === tc.className)) {
+            return module;
+        }
+    }
+    return undefined;
 }
 
 function staticMethodName(methodName: string): string {

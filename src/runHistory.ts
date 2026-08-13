@@ -23,6 +23,7 @@ function computeStats(suiteResults: readonly SuiteResult[]): RunStats {
     const stats: RunStats = { passed: 0, failed: 0, errors: 0, skipped: 0 };
     for (const suite of suiteResults) {
         for (const tc of suite.testCases) {
+            if (tc.synthetic) { continue; }
             const status: TestCaseStatus = tc.status;
             if (status === 'passed')       { stats.passed++;  }
             else if (status === 'failed')  { stats.failed++;  }

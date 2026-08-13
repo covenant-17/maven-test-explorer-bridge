@@ -70,6 +70,7 @@ interface RunTarget {
     module: MavenModule;
     classNames: readonly string[];
     runningNodeIds?: readonly string[];
+    expectedTestCount?: number;
 }
 
 let outputChannel: vscode.OutputChannel;
@@ -84,6 +85,7 @@ let selectedNodeId: string | undefined;
 let running = false;
 let runtimeRunningNodeIds = new Set<string>();
 let runtimeResultByXmlPath = new Map<string, SuiteResult>();
+let selectedNodePersistTimer: ReturnType<typeof setTimeout> | undefined;
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
@@ -134,7 +136,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         showHistory: () => showHistory(context),
         applyFilter: (value) => applyFilter(context, value),
         clearFilter: () => applyFilter(context, ''),
-        openNode: (id) => openNode(id),
+        openNode: (id, target) => openNode(id, target),
         runNode: (id) => runNode(context, id),
         runNodes: (ids) => runNodes(context, ids),
         selectNode: (id) => selectNode(context, id),
@@ -164,6 +166,9 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
     const settings = readSettings();
     restoreResultCacheIfNeeded(context);
     currentModules = await discoverModules();
+    if (pruneResultCacheForModules(currentModules) > 0) {
+        await saveResultCache(context);
+    }
     modulesWithClasses = [];
     for (const module of currentModules) {
         const classes = await scanTestFiles(module.moduleDir, settings.testSourceGlobs);
@@ -248,17 +253,70 @@ async function runInlineRequest(
     context: vscode.ExtensionContext,
     request: vscode.TestRunRequest,
 ): Promise<void> {
-    const requestedIds = (request.include ?? [])
-        .map((item) => customNodeIdForInlineItem(item))
-        .filter((id): id is string => Boolean(id));
-    if (requestedIds.length === 0) {
+    if (request.include === undefined && (request.exclude?.length ?? 0) === 0) {
         await runAll(context);
-    } else {
+        return;
+    }
+
+    const requestedIds = inlineRequestedNodeIds(request);
+    if (requestedIds.length > 0) {
         await runNodes(context, requestedIds);
+    } else {
+        outputChannel.appendLine('[Runner] No Maven tests matched the requested VS Code folder/test scope.');
     }
 }
 
+function inlineRequestedNodeIds(request: vscode.TestRunRequest): string[] {
+    const includedNodes = request.include === undefined
+        ? currentTree.roots
+        : request.include
+            .map((item) => customNodeIdForInlineItem(item))
+            .filter((id): id is string => Boolean(id))
+            .map((id) => currentTree.nodesById.get(id))
+            .filter((node): node is CustomTestNode => Boolean(node));
+    const excludedIds = new Set((request.exclude ?? [])
+        .map((item) => customNodeIdForInlineItem(item))
+        .filter((id): id is string => Boolean(id)));
+
+    const requestedIds = includedNodes.flatMap((node) => subtractExcludedNodes(node, excludedIds).ids);
+    return Array.from(new Set(requestedIds));
+}
+
+function subtractExcludedNodes(
+    node: CustomTestNode,
+    excludedIds: ReadonlySet<string>,
+): { ids: string[]; containsExclusion: boolean } {
+    if (isNodeOrAncestorExcluded(node, excludedIds)) {
+        return { ids: [], containsExclusion: true };
+    }
+
+    const childResults = node.children.map((child) => subtractExcludedNodes(child, excludedIds));
+    if (!childResults.some((result) => result.containsExclusion)) {
+        return { ids: [node.id], containsExclusion: false };
+    }
+    return {
+        ids: childResults.flatMap((result) => result.ids),
+        containsExclusion: true,
+    };
+}
+
+function isNodeOrAncestorExcluded(node: CustomTestNode, excludedIds: ReadonlySet<string>): boolean {
+    let current: CustomTestNode | undefined = node;
+    while (current) {
+        if (excludedIds.has(current.id)) {
+            return true;
+        }
+        current = current.parentId ? currentTree.nodesById.get(current.parentId) : undefined;
+    }
+    return false;
+}
+
 function customNodeIdForInlineItem(item: vscode.TestItem): string | undefined {
+    for (const node of currentTree.nodesById.values()) {
+        if (inlineItemIdForNode(node) === item.id) {
+            return node.id;
+        }
+    }
     if (item.uri && item.range) {
         const sourcePath = path.normalize(item.uri.fsPath).toLocaleLowerCase();
         const line = item.range.start.line + 1;
@@ -272,6 +330,22 @@ function customNodeIdForInlineItem(item: vscode.TestItem): string | undefined {
         }
     }
     return currentTree.nodesById.has(item.id) ? item.id : undefined;
+}
+
+function inlineItemIdForNode(node: CustomTestNode): string | undefined {
+    if (node.kind === 'module') {
+        return node.moduleId;
+    }
+    if (node.kind === 'package') {
+        return `${node.moduleId}/${node.packageName ?? ''}`;
+    }
+    if (node.kind === 'class' && node.className !== undefined) {
+        return `${node.moduleId}/${node.packageName ?? ''}/${node.className}`;
+    }
+    if (node.fqcn && node.className !== undefined && node.methodName !== undefined) {
+        return `${node.moduleId}/${node.packageName ?? ''}/${node.className}#${node.methodName}`;
+    }
+    return undefined;
 }
 
 function hasVisibleExpandedItems(roots: readonly CustomTestNode[]): boolean {
@@ -437,19 +511,26 @@ async function runTargets(
     targets: readonly RunTarget[],
     historyLabel: string,
 ): Promise<void> {
+    const executionTargets = targets.map((target) => ({
+        ...target,
+        expectedTestCount: target.expectedTestCount ?? expectedTestCount(target.runningNodeIds ?? []),
+    }));
     const settings = readSettings();
     if (settings.showOutputChannel) {
         outputChannel.show(true);
     }
+    outputChannel.appendLine(
+        `[Runner] Scope: ${executionTargets.length} Maven module(s), ${executionTargets.reduce((sum, target) => sum + target.expectedTestCount, 0)} test(s): ${executionTargets.map((target) => target.module.moduleDir).join(', ')}`,
+    );
     running = true;
-    runtimeRunningNodeIds = new Set(targets.flatMap((target) => target.runningNodeIds ?? []));
+    runtimeRunningNodeIds = new Set(executionTargets.flatMap((target) => target.runningNodeIds ?? []));
     runtimeResultByXmlPath = new Map();
     rebuildTree();
 
     const cancellationSource = new vscode.CancellationTokenSource();
     const allResults: SuiteResult[] = [];
     const fullRunModuleDirs = new Set<string>();
-    const inlineItems = inlineItemsForTargets(targets);
+    const inlineItems = inlineItemsForTargets(executionTargets);
     const inlineRun = inlineController.createTestRun(
         new vscode.TestRunRequest(inlineItems.length > 0 ? inlineItems : undefined),
         historyLabel,
@@ -461,7 +542,7 @@ async function runTargets(
     }
 
     try {
-        for (const target of targets) {
+        for (const target of executionTargets) {
             if (settings.clearReportsBeforeRun) {
                 clearReportDirectories(target.module.moduleDir);
                 outputChannel.appendLine(`[Runner] Cleared reports in: ${target.module.moduleDir}`);
@@ -485,7 +566,13 @@ async function runTargets(
 
             const poller = startRuntimeReportPolling(target.module.moduleDir, settings.reportGlobs);
             try {
-                const result = await runMaven(target.module.moduleDir, args, outputChannel, cancellationSource.token);
+                const result = await runMaven(
+                    target.module.moduleDir,
+                    args,
+                    outputChannel,
+                    cancellationSource.token,
+                    target.expectedTestCount,
+                );
                 poller.flush();
                 if (!result.cancelled) {
                     const suiteResults = addSkippedResultsForLifecycleFailures(
@@ -529,6 +616,25 @@ async function runTargets(
     }
 }
 
+function expectedTestCount(runningNodeIds: readonly string[]): number {
+    const selectedIds = new Set(runningNodeIds);
+    let total = 0;
+    for (const node of currentTree.nodesById.values()) {
+        if (!selectedIds.has(node.id)) {
+            continue;
+        }
+        if (node.counted === false) {
+            continue;
+        }
+        if (node.kind === 'virtualMethod') {
+            total++;
+        } else if (node.kind === 'method' && !node.hasVirtualInvocations) {
+            total++;
+        }
+    }
+    return total;
+}
+
 function addSkippedResultsForLifecycleFailures(
     suiteResults: readonly SuiteResult[],
     runningNodeIds: readonly string[],
@@ -569,6 +675,7 @@ function addSkippedResultsForLifecycleFailures(
             stackTrace: undefined,
             systemOut: undefined,
             systemErr: undefined,
+            synthetic: true,
         });
         skippedByClass.set(node.fqcn, skipped);
         reportedMethods.add(key);
@@ -772,14 +879,23 @@ async function applyFilter(context: vscode.ExtensionContext, value: string): Pro
     rebuildTree();
 }
 
-async function openNode(id: string): Promise<void> {
+async function openNode(id: string, target: 'test' | 'class' = 'test'): Promise<void> {
     const requested = currentTree.nodesById.get(id);
     if (!requested) {
         return;
     }
-    const anchor = requested.isVirtual && requested.virtualParentId
+    let anchor = requested.isVirtual && requested.virtualParentId
         ? currentTree.nodesById.get(requested.virtualParentId) ?? requested
         : requested;
+    if (target === 'class') {
+        let classAnchor: CustomTestNode | undefined = requested;
+        while (classAnchor && classAnchor.kind !== 'class') {
+            classAnchor = classAnchor.parentId
+                ? currentTree.nodesById.get(classAnchor.parentId)
+                : undefined;
+        }
+        anchor = classAnchor ?? anchor;
+    }
     if (requested.isVirtual) {
         vscode.window.showInformationMessage('Maven Test Explorer: Virtual test, opened parent method.');
     }
@@ -797,10 +913,15 @@ async function openNode(id: string): Promise<void> {
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
 }
 
-async function selectNode(context: vscode.ExtensionContext, id: string): Promise<void> {
+function selectNode(context: vscode.ExtensionContext, id: string): void {
     selectedNodeId = id;
-    await context.workspaceState.update(SELECTED_ID_KEY, id);
-    rebuildTree();
+    if (selectedNodePersistTimer) {
+        clearTimeout(selectedNodePersistTimer);
+    }
+    selectedNodePersistTimer = setTimeout(() => {
+        selectedNodePersistTimer = undefined;
+        void context.workspaceState.update(SELECTED_ID_KEY, selectedNodeId);
+    }, 150);
 }
 
 async function setExpanded(context: vscode.ExtensionContext, id: string, expanded: boolean): Promise<void> {
@@ -810,7 +931,13 @@ async function setExpanded(context: vscode.ExtensionContext, id: string, expande
         expandedIds.delete(id);
     }
     await context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds));
-    rebuildTree();
+    void vscode.commands.executeCommand(
+        'setContext',
+        'mavenTestExplorer.hasExpandedItems',
+        activeViewMode === 'list'
+            ? currentTree.filteredRoots.some((root) => expandedIds.has(root.id))
+            : hasVisibleExpandedItems(currentTree.filteredRoots),
+    );
 }
 
 async function setAllExpanded(context: vscode.ExtensionContext, expanded: boolean): Promise<void> {
@@ -967,7 +1094,18 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
     }
     const watcher = vscode.workspace.createFileSystemWatcher('**/target/{surefire-reports,failsafe-reports}/TEST-*.xml');
     let timer: NodeJS.Timeout | undefined;
-    const schedule = () => {
+    const pendingModuleDirs = new Set<string>();
+    const schedule = (uri: vscode.Uri) => {
+        if (running) {
+            return;
+        }
+        const module = currentModules
+            .filter((candidate) => isPathInside(candidate.moduleDir, uri.fsPath))
+            .sort((left, right) => right.moduleDir.length - left.moduleDir.length)[0];
+        if (!module) {
+            return;
+        }
+        pendingModuleDirs.add(module.moduleDir);
         if (timer) {
             clearTimeout(timer);
         }
@@ -975,10 +1113,17 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
             if (running) {
                 return;
             }
-            outputChannel.appendLine('[Watcher] Report XML change detected, refreshing results...');
-            const allResults = currentModules.flatMap((module) => readAllReports(module.moduleDir, readSettings().reportGlobs));
-            updateResultCache(allResults, new Set());
-            updateFailedClasses(allResults);
+            const changedModuleDirs = new Set(pendingModuleDirs);
+            pendingModuleDirs.clear();
+            outputChannel.appendLine(
+                `[Watcher] Report XML changed in ${changedModuleDirs.size} module(s), refreshing only those results...`,
+            );
+            const reportGlobs = readSettings().reportGlobs;
+            const changedResults = currentModules
+                .filter((module) => changedModuleDirs.has(module.moduleDir))
+                .flatMap((module) => readAllReports(module.moduleDir, reportGlobs));
+            updateResultCache(changedResults, changedModuleDirs);
+            updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
             rebuildTree();
         }, 500);
@@ -1034,24 +1179,61 @@ function resolveReportDirs(moduleDir: string, reportGlobs: readonly string[]): S
 
 function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs: ReadonlySet<string>): void {
     if (fullRunModuleDirs.size > 0) {
-        for (const [suiteName, suite] of resultCache) {
-            if ([...fullRunModuleDirs].some((dir) => suite.xmlPath.startsWith(dir + path.sep) || suite.xmlPath.startsWith(dir + '/'))) {
-                resultCache.delete(suiteName);
+        for (const [cacheKey, suite] of resultCache) {
+            if ([...fullRunModuleDirs].some((dir) => isPathInside(dir, suite.xmlPath))) {
+                resultCache.delete(cacheKey);
             }
         }
     }
     for (const suite of newResults) {
-        const existing = resultCache.get(suite.suiteName);
+        const cacheKey = resultCacheKey(suite);
+        const existing = resultCache.get(cacheKey);
         if (!existing) {
-            resultCache.set(suite.suiteName, suite);
+            resultCache.set(cacheKey, suite);
             continue;
         }
-        const cases = new Map(existing.testCases.map((tc) => [tc.methodName, tc]));
-        for (const tc of suite.testCases) {
-            cases.set(tc.methodName, tc);
+        const cases = new Map(indexTestCases(existing.testCases));
+        for (const [testCaseKey, tc] of indexTestCases(suite.testCases)) {
+            cases.set(testCaseKey, tc);
         }
-        resultCache.set(suite.suiteName, { ...suite, testCases: Array.from(cases.values()) });
+        resultCache.set(cacheKey, { ...suite, testCases: Array.from(cases.values()) });
     }
+}
+
+function indexTestCases(testCases: readonly TestCaseResult[]): Array<[string, TestCaseResult]> {
+    const occurrences = new Map<string, number>();
+    return testCases.map((tc) => {
+        const baseKey = `${tc.className}#${tc.methodName}`;
+        const occurrence = (occurrences.get(baseKey) ?? 0) + 1;
+        occurrences.set(baseKey, occurrence);
+        return [`${baseKey}#${occurrence}`, tc];
+    });
+}
+
+function pruneResultCacheForModules(modules: readonly MavenModule[]): number {
+    let removed = 0;
+    for (const [cacheKey, suite] of resultCache) {
+        if (modules.some((module) => isPathInside(module.moduleDir, suite.xmlPath))) {
+            continue;
+        }
+        resultCache.delete(cacheKey);
+        removed++;
+    }
+    if (removed > 0) {
+        updateFailedClasses(Array.from(resultCache.values()));
+        outputChannel.appendLine(`[Cache] Removed ${removed} result(s) outside the current workspace modules`);
+    }
+    return removed;
+}
+
+function resultCacheKey(suite: SuiteResult): string {
+    return path.normalize(suite.xmlPath).toLocaleLowerCase();
+}
+
+function isPathInside(parentDir: string, candidatePath: string): boolean {
+    const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
+    return relative === ''
+        || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
 }
 
 function updateFailedClasses(suiteResults: readonly SuiteResult[]): void {
@@ -1080,12 +1262,32 @@ function restoreResultCacheIfNeeded(context: vscode.ExtensionContext): void {
     }
     const plain = context.workspaceState.get<Record<string, SuiteResult>>(RESULT_CACHE_KEY);
     if (plain) {
-        for (const [key, value] of Object.entries(plain)) {
-            resultCache.set(key, value);
+        for (const value of Object.values(plain)) {
+            const migrated = markLegacyLifecyclePlaceholders(value);
+            resultCache.set(resultCacheKey(migrated), migrated);
         }
         updateFailedClasses(Array.from(resultCache.values()));
         outputChannel.appendLine(`[Cache] Restored ${resultCache.size} result(s) from workspaceState`);
     }
+}
+
+function markLegacyLifecyclePlaceholders(suite: SuiteResult): SuiteResult {
+    const lifecycleFailureClasses = new Set(suite.testCases
+        .filter((tc) => tc.methodName.startsWith('@') && (tc.status === 'failed' || tc.status === 'error'))
+        .map((tc) => tc.className));
+    if (lifecycleFailureClasses.size === 0) {
+        return suite;
+    }
+    return {
+        ...suite,
+        testCases: suite.testCases.map((tc) => (
+            lifecycleFailureClasses.has(tc.className)
+            && !tc.methodName.startsWith('@')
+            && tc.status === 'skipped'
+                ? { ...tc, synthetic: true }
+                : tc
+        )),
+    };
 }
 
 function findModuleForClass(fqcn: string): MavenModule | undefined {

@@ -33,7 +33,7 @@ export interface WebviewHandlers {
     showHistory(): void | Promise<void>;
     applyFilter(value: string): void | Promise<void>;
     clearFilter(): void | Promise<void>;
-    openNode(id: string): void | Promise<void>;
+    openNode(id: string, target?: 'test' | 'class'): void | Promise<void>;
     runNode(id: string): void | Promise<void>;
     runNodes(ids: readonly string[]): void | Promise<void>;
     selectNode(id: string): void | Promise<void>;
@@ -115,7 +115,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 await this.handlers.clearFilter();
                 break;
             case 'openNode':
-                if (message.id) { await this.handlers.openNode(message.id); }
+                if (message.id) { await this.handlers.openNode(message.id, message.target); }
                 break;
             case 'runNode':
                 if (message.id) { await this.handlers.runNode(message.id); }
@@ -392,6 +392,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             height: 18px;
             line-height: 16px;
             overflow: hidden;
+        }
+        .summary-total {
+            margin-left: -4px;
         }
         .summary-count {
             display: inline-flex;
@@ -784,6 +787,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 padding-left: 4px;
                 padding-right: 4px;
             }
+            .summary-total {
+                margin-left: -2px;
+            }
             .description,
             .tags,
             .node-stats {
@@ -820,6 +826,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         const ROW_HEIGHT = 22;
+        const ROW_OVERSCAN = 8;
         const TOOLTIP_LINE_BREAK = String.fromCharCode(10);
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@executed'];
@@ -832,6 +839,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let tooltipOwnerId = null;
         let pendingTooltip;
         let flatRows = [];
+        let expandedIdSet = new Set();
         let activeGuideParentId;
         let menuItems = [];
         let menuIndex = -1;
@@ -841,6 +849,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let submenuItems = [];
         let submenuIndex = -1;
         let submenuTrigger = null;
+        let rowsRenderFrame;
+        let renderedRowStart = -1;
+        let renderedRowEnd = -1;
 
         const treeEl = document.getElementById('tree');
         let rowsEl = document.getElementById('rows');
@@ -923,7 +934,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         });
 
         treeEl.addEventListener('keydown', handleTreeKeydown);
-        treeEl.addEventListener('scroll', hideNodeTooltip);
+        treeEl.addEventListener('scroll', () => {
+            hideNodeTooltip();
+            scheduleVisibleRowsRender();
+        });
+        window.addEventListener('resize', scheduleVisibleRowsRender);
 
         document.addEventListener('click', (event) => {
             if (!copyMenuEl.contains(event.target) && !copySubmenuEl.contains(event.target)) {
@@ -940,6 +955,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (message.type === 'stateUpdated') {
                 const previousTop = treeEl.scrollTop;
                 state = message.state || state;
+                expandedIdSet = new Set(state.expandedIds || []);
                 const visibleEntries = state.viewMode === 'list'
                     ? flattenListRoots(state.roots || [])
                     : flattenRoots(state.roots || []);
@@ -1209,8 +1225,26 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function summaryTotal(value) {
-            const item = textSpan('of ' + value + ' tests', 'summary-group');
-            return withInternalTooltip(item, 'summary-total', 'Total: ' + value);
+            const item = textSpan('Σ' + value, 'summary-group summary-total');
+            const dynamic = dynamicInvocationCount(state.roots || []);
+            const regular = Math.max(0, value - dynamic);
+            const tooltip = [
+                'Total tests: ' + value,
+                'Regular tests: ' + regular,
+                'Dynamic invocations: ' + dynamic,
+            ].join(TOOLTIP_LINE_BREAK);
+            return withInternalTooltip(item, 'summary-total', tooltip);
+        }
+
+        function dynamicInvocationCount(nodes) {
+            let total = 0;
+            for (const node of nodes || []) {
+                if (node.kind === 'virtualMethod' && node.counted !== false) {
+                    total += node.stats?.total || 0;
+                }
+                total += dynamicInvocationCount(node.children || []);
+            }
+            return total;
         }
 
         function withInternalTooltip(element, ownerId, text) {
@@ -1237,7 +1271,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 ? 'Maven Test Explorer list'
                 : 'Maven Test Explorer tree');
             flatRows = listMode ? flattenListRoots(state.roots || []) : flattenRoots(state.roots || []);
-            activeGuideParentId = listMode ? undefined : findParentId(state.roots || [], state.selectedId);
+            activeGuideParentId = listMode ? undefined : selectedParentId();
+            renderedRowStart = -1;
+            renderedRowEnd = -1;
 
             if (flatRows.length === 0) {
                 rowsEl.style.height = '100%';
@@ -1247,10 +1283,43 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
 
             rowsEl.style.height = Math.max(flatRows.length * ROW_HEIGHT, treeEl.clientHeight) + 'px';
-            flatRows.forEach((entry, index) => rowsEl.appendChild(
-                entry.separator ? renderListSeparator(entry, index) : renderNode(entry, index),
-            ));
             treeEl.scrollTop = Math.min(previousTop, Math.max(0, rowsEl.offsetHeight - treeEl.clientHeight));
+            renderVisibleRows(true);
+            updateActiveDescendant();
+        }
+
+        function scheduleVisibleRowsRender() {
+            if (rowsRenderFrame !== undefined) {
+                return;
+            }
+            rowsRenderFrame = requestAnimationFrame(() => {
+                rowsRenderFrame = undefined;
+                renderVisibleRows();
+            });
+        }
+
+        function renderVisibleRows(force = false) {
+            if (flatRows.length === 0) {
+                return;
+            }
+            const firstIndex = Math.max(0, Math.floor(treeEl.scrollTop / ROW_HEIGHT) - ROW_OVERSCAN);
+            const lastIndex = Math.min(
+                flatRows.length,
+                Math.ceil((treeEl.scrollTop + treeEl.clientHeight) / ROW_HEIGHT) + ROW_OVERSCAN,
+            );
+            if (!force && firstIndex === renderedRowStart && lastIndex === renderedRowEnd) {
+                return;
+            }
+            renderedRowStart = firstIndex;
+            renderedRowEnd = lastIndex;
+            const fragment = document.createDocumentFragment();
+            for (let index = firstIndex; index < lastIndex; index++) {
+                const entry = flatRows[index];
+                fragment.appendChild(
+                    entry.separator ? renderListSeparator(entry, index) : renderNode(entry, index),
+                );
+            }
+            rowsEl.replaceChildren(fragment);
             updateActiveDescendant();
         }
 
@@ -1410,7 +1479,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 separator,
             ));
             separator.addEventListener('blur', () => hideNodeTooltip('list-project-' + projectNode.id));
-            const toggleProject = () => post('setExpanded', { id: projectNode.id, expanded: !expanded });
+            const toggleProject = () => setNodeExpanded(projectNode.id, !expanded);
             const twisty = document.createElement('button');
             twisty.className = 'twisty codicon ' + (expanded ? 'codicon-chevron-down' : 'codicon-chevron-right');
             twisty.type = 'button';
@@ -1490,26 +1559,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        function findParentId(roots, selectedId) {
-            if (!selectedId) {
+        function selectedParentId() {
+            if (!state.selectedId) {
                 return undefined;
             }
-            const path = findNodePath(roots, selectedId, []);
-            return path.length > 1 ? path[path.length - 2].id : undefined;
-        }
-
-        function findNodePath(nodes, selectedId, path) {
-            for (const node of nodes || []) {
-                const nextPath = [...path, node];
-                if (node.id === selectedId) {
-                    return nextPath;
-                }
-                const childPath = findNodePath(node.children || [], selectedId, nextPath);
-                if (childPath.length) {
-                    return childPath;
-                }
-            }
-            return [];
+            return flatRows.find(entry => entry.node?.id === state.selectedId)?.node.parentId;
         }
 
         function renderNode(entry, index) {
@@ -1521,6 +1575,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const selected = selectedNodeIds.has(node.id);
             const row = document.createElement('div');
             row.id = rowDomId(node.id);
+            row.dataset.nodeId = node.id;
+            row.dataset.rowIndex = String(index);
             row.className = 'row' + (selected ? ' selected focused' : '');
             row.setAttribute('role', listMode ? 'option' : 'treeitem');
             if (!listMode) {
@@ -1561,7 +1617,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 event.stopPropagation();
                 if (hasChildren) {
                     selectNode(node.id);
-                    post('setExpanded', { id: node.id, expanded: !expanded });
+                    setNodeExpanded(node.id, !expanded);
                 }
             });
 
@@ -1614,7 +1670,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
                 selectNode(node.id);
                 if (hasChildren) {
-                    post('setExpanded', { id: node.id, expanded: !expanded });
+                    setNodeExpanded(node.id, !expanded);
                 } else if (isLeafSourceMethod(node)) {
                     post('openNode', { id: node.id });
                 }
@@ -1637,6 +1693,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (node.description) {
                 label.appendChild(textSpan(node.description, 'description'));
             }
+            if (node.inheritedFrom) {
+                label.appendChild(textSpan(
+                    'inherited from ' + shortTypeName(node.inheritedFrom),
+                    'class-context',
+                ));
+            }
             if (tags) {
                 label.appendChild(textSpan(tags, 'tags'));
             }
@@ -1656,7 +1718,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 appendMetaPart(container, stats.failed || 0, 'failed');
                 appendMetaPart(container, stats.error || 0, 'error');
                 appendMetaPart(container, stats.skipped || 0, 'skipped');
-                const total = textSpan('#' + String(stats.total), 'meta-total');
+                const total = textSpan('Σ' + String(stats.total), 'meta-total');
                 container.appendChild(total);
                 return;
             }
@@ -1792,14 +1854,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             } else if (event.key === 'ArrowLeft') {
                 event.preventDefault();
                 if (hasChildren && isExpanded(node.id)) {
-                    post('setExpanded', { id: node.id, expanded: false });
+                    setNodeExpanded(node.id, false);
                 } else if (!listMode && node.parentId) {
                     selectNode(node.parentId);
                 }
             } else if (event.key === 'ArrowRight') {
                 event.preventDefault();
                 if (hasChildren && !isExpanded(node.id)) {
-                    post('setExpanded', { id: node.id, expanded: true });
+                    setNodeExpanded(node.id, true);
                 } else if (hasChildren && node.children.length) {
                     selectNode(node.children[0].id);
                 }
@@ -1888,12 +1950,24 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             updateSelectedRows();
         }
 
+        function setNodeExpanded(id, expanded) {
+            const expandedIds = new Set(expandedIdSet);
+            if (expanded) {
+                expandedIds.add(id);
+            } else {
+                expandedIds.delete(id);
+            }
+            expandedIdSet = expandedIds;
+            state = { ...state, expandedIds: Array.from(expandedIds) };
+            hideNodeTooltip();
+            renderRows(treeEl.scrollTop);
+            post('setExpanded', { id, expanded });
+        }
+
         function updateSelectedRows() {
-            activeGuideParentId = findParentId(state.roots || [], state.selectedId);
+            activeGuideParentId = state.viewMode === 'list' ? undefined : selectedParentId();
             for (const row of rowsEl.querySelectorAll('.row')) {
-                const entry = flatRows.find(candidate => (
-                    candidate.node && row.id === rowDomId(candidate.node.id)
-                ));
+                const entry = flatRows[Number(row.dataset.rowIndex)];
                 const selected = Boolean(entry && selectedNodeIds.has(entry.node.id));
                 row.classList.toggle('selected', selected);
                 row.classList.toggle('focused', Boolean(entry && entry.node.id === state.selectedId));
@@ -1904,22 +1978,19 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function updateIndentGuides() {
-            flatRows.forEach((entry) => {
-                if (!entry.node) {
-                    return;
-                }
-                const row = document.getElementById(rowDomId(entry.node.id));
-                if (!row) {
-                    return;
+            for (const row of rowsEl.querySelectorAll('.row')) {
+                const entry = flatRows[Number(row.dataset.rowIndex)];
+                if (!entry?.node) {
+                    continue;
                 }
                 row.querySelectorAll('.indent-guide').forEach((guide, index) => {
                     guide.classList.toggle('active', entry.ancestorIds[index] === activeGuideParentId);
                 });
-            });
+            }
         }
 
         function updateActiveDescendant() {
-            if (state.selectedId && selectedRowIndex() >= 0) {
+            if (state.selectedId && document.getElementById(rowDomId(state.selectedId))) {
                 treeEl.setAttribute('aria-activedescendant', rowDomId(state.selectedId));
             } else {
                 treeEl.removeAttribute('aria-activedescendant');
@@ -1961,14 +2032,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             menuItems.push(runItem);
             if (canGoToTest(node)) {
                 appendMenuSeparator(copyMenuEl);
-                const goToItem = menuItem('codicon-go-to-file', 'Go to Test');
-                goToItem.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    post('openNode', { id: node.id });
-                    hideCopyMenu();
-                });
-                copyMenuEl.appendChild(goToItem);
-                menuItems.push(goToItem);
+                appendGoToItem(
+                    node,
+                    node.inheritedFrom ? 'Go to Test Declaration' : 'Go to Test',
+                    'test',
+                );
+                if (node.inheritedFrom) {
+                    appendGoToItem(node, 'Go to Test Class', 'class');
+                }
             }
             if (copyOptions(node).length > 0) {
                 appendMenuSeparator(copyMenuEl);
@@ -1995,6 +2066,17 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             setMenuIndex(0);
             copyMenuEl.addEventListener('keydown', handleMenuKeydown);
             menuItems[0].focus();
+        }
+
+        function appendGoToItem(node, label, target) {
+            const item = menuItem('codicon-go-to-file', label);
+            item.addEventListener('click', (event) => {
+                event.stopPropagation();
+                post('openNode', { id: node.id, target });
+                hideCopyMenu();
+            });
+            copyMenuEl.appendChild(item);
+            menuItems.push(item);
         }
 
         function showCopySubmenu(node, anchorEl) {
@@ -2162,7 +2244,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function isExpanded(id) {
-            return (state.expandedIds || []).includes(id);
+            return expandedIdSet.has(id);
         }
 
         function rowDomId(id) {
@@ -2243,6 +2325,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
                 'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
             ];
+            if (node.inheritedFrom) {
+                lines.push('Inherited from: ' + node.inheritedFrom);
+                if (node.sourcePath) {
+                    lines.push('Declared at: ' + node.sourcePath + (node.line ? ':' + node.line : ''));
+                }
+            }
             if (node.tags && node.tags.length > 0) {
                 lines.push('Tags: ' + node.tags.map(tag => '@' + tag).join(' '));
             }
@@ -2250,6 +2338,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 lines.push('Results are in generated test cases');
             }
             return lines.join(TOOLTIP_LINE_BREAK);
+        }
+
+        function shortTypeName(fqcn) {
+            const normalized = String(fqcn || '').replace(/\$/g, '.');
+            return normalized.substring(normalized.lastIndexOf('.') + 1);
         }
 
         function fullNameForTooltip(node) {
@@ -2292,6 +2385,7 @@ interface WebviewMessage {
     id?: string;
     ids?: string[];
     value?: string;
+    target?: 'test' | 'class';
     expanded?: boolean;
     kind?: string;
 }

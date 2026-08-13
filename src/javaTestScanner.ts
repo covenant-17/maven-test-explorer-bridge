@@ -11,6 +11,8 @@ export interface MethodInfo {
     readonly name: string;
     readonly displayName: string | undefined;
     readonly line: number;
+    readonly sourcePath?: string;
+    readonly inheritedFrom?: string;
     readonly tags: readonly string[];
     readonly annotations: readonly SourceAnnotation[];
 }
@@ -23,6 +25,9 @@ export interface TestClassInfo {
      * Examples: "AppTest", "AppTest$WhenNameIsSimple", "AppTest$WhenCheckingFormat$AndCasing"
      */
     readonly className: string;
+    readonly line: number;
+    readonly isInterface: boolean;
+    readonly implementedTypes: readonly string[];
     readonly displayName: string | undefined;
     readonly tags: readonly string[];
     readonly annotations: readonly SourceAnnotation[];
@@ -33,6 +38,9 @@ export interface TestClassInfo {
 interface ClassFrame {
     simpleName: string;
     fullName: string;
+    line: number;
+    isInterface: boolean;
+    implementedTypes: string[];
     openDepth: number;
     displayName: string | undefined;
     tags: string[];
@@ -48,7 +56,8 @@ const NESTED_ANNOTATION_PATTERN = /@Nested\b/;
 const TAG_ANNOTATION_PATTERN = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
 const STRING_ANNOTATION_PATTERN = /@(\w+)\s*\(\s*(\{[^}]*\}|"[^"]*")\s*\)/g;
 const STRING_LITERAL_PATTERN = /"([^"]+)"/g;
-const CLASS_DECL_PATTERN = /(?:^|\s)(?:class|interface)\s+(\w+)/;
+const CLASS_DECL_PATTERN = /(?:^|\s)(class|interface)\s+(\w+)/;
+const IMPLEMENTS_PATTERN = /\bimplements\s+([^\{]+)/;
 // Matches @Test void method(), @TestFactory Stream<X> method(), default void method()
 const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private|default)\s+)?(?:static\s+)?(?:final\s+)?(?:void|\w[\w.<>,\s]*)\s+(\w+)\s*\(/;
 
@@ -75,11 +84,11 @@ export async function scanTestFiles(
     }
     allUris.sort((a, b) => normalizePath(a.fsPath).localeCompare(normalizePath(b.fsPath)));
 
-    const results: TestClassInfo[] = [];
+    const declarations: TestClassInfo[] = [];
     for (const uri of allUris) {
-        results.push(...parseJavaTestFile(uri.fsPath));
+        declarations.push(...parseJavaTestFile(uri.fsPath));
     }
-    return results;
+    return resolveTestContracts(declarations);
 }
 
 /**
@@ -93,8 +102,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     } catch {
         return [];
     }
-
-    if (!TEST_ANNOTATION_PATTERN.test(content)) {
+    if (!TEST_ANNOTATION_PATTERN.test(content) && !/\bimplements\b/.test(content)) {
         return [];
     }
 
@@ -169,13 +177,21 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
         // --- Class declaration (outer class or @Nested) ---
         const classMatch = CLASS_DECL_PATTERN.exec(trimmed);
         if (classMatch && (classStack.length === 0 || pendingNested)) {
-            const simpleName = classMatch[1];
+            const isInterface = classMatch[1] === 'interface';
+            const simpleName = classMatch[2];
             const parentFull = classStack.length > 0 ? classStack[classStack.length - 1].fullName : '';
             const fullName = parentFull ? `${parentFull}$${simpleName}` : simpleName;
+            const declarationSource = lines
+                .slice(i, Math.min(lines.length, i + 8))
+                .join(' ')
+                .split('{', 1)[0];
 
             classStack.push({
                 simpleName,
                 fullName,
+                line: i + 1,
+                isInterface,
+                implementedTypes: parseImplementedTypes(declarationSource),
                 openDepth: braceDepth,
                 displayName: pendingDisplayName,
                 tags: [...pendingTags],
@@ -202,6 +218,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                         name: methodName,
                         displayName: pendingDisplayName,
                         line: i + 1,
+                        sourcePath: filePath,
                         tags: [...pendingTags],
                         annotations: [...pendingAnnotations],
                     });
@@ -225,6 +242,9 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                         filePath,
                         packageName,
                         className: frame.fullName,
+                        line: frame.line,
+                        isInterface: frame.isInterface,
+                        implementedTypes: frame.implementedTypes,
                         displayName: frame.displayName,
                         tags: frame.tags,
                         annotations: frame.annotations,
@@ -242,6 +262,9 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
             filePath,
             packageName,
             className: frame.fullName,
+            line: frame.line,
+            isInterface: frame.isInterface,
+            implementedTypes: frame.implementedTypes,
             displayName: frame.displayName,
             tags: frame.tags,
             annotations: frame.annotations,
@@ -250,6 +273,93 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     }
 
     return completed;
+}
+
+function parseImplementedTypes(declaration: string): string[] {
+    const match = IMPLEMENTS_PATTERN.exec(declaration);
+    if (!match) {
+        return [];
+    }
+    return match[1]
+        .split(',')
+        .map((value) => value.trim().replace(/<.*>/g, ''))
+        .filter(Boolean);
+}
+
+function resolveTestContracts(declarations: readonly TestClassInfo[]): TestClassInfo[] {
+    const contracts = declarations.filter((item) => item.isInterface && item.methods.length > 0);
+    const contractsByFqcn = new Map(contracts.map((item) => [buildFqcn(item.packageName, item.className), item]));
+    const contractsBySimpleName = new Map<string, TestClassInfo[]>();
+    for (const contract of contracts) {
+        const simpleName = contract.className.split('$').pop()!;
+        const matches = contractsBySimpleName.get(simpleName) ?? [];
+        matches.push(contract);
+        contractsBySimpleName.set(simpleName, matches);
+    }
+
+    const resolved = declarations
+        .filter((item) => !item.isInterface)
+        .map((item) => inheritContractMethods(item, contractsByFqcn, contractsBySimpleName));
+    const includedNames = new Set(resolved
+        .filter((item) => item.methods.length > 0)
+        .map((item) => buildFqcn(item.packageName, item.className)));
+
+    // Keep empty outer containers when their @Nested descendants contain tests.
+    for (const item of resolved) {
+        const fqcn = buildFqcn(item.packageName, item.className);
+        if (Array.from(includedNames).some((included) => included.startsWith(`${fqcn}$`))) {
+            includedNames.add(fqcn);
+        }
+    }
+    return resolved.filter((item) => includedNames.has(buildFqcn(item.packageName, item.className)));
+}
+
+function inheritContractMethods(
+    cls: TestClassInfo,
+    contractsByFqcn: ReadonlyMap<string, TestClassInfo>,
+    contractsBySimpleName: ReadonlyMap<string, readonly TestClassInfo[]>,
+): TestClassInfo {
+    const methods = [...cls.methods];
+    const methodNames = new Set(methods.map((method) => method.name));
+    for (const implementedType of cls.implementedTypes) {
+        const normalizedType = implementedType.replace(/\s/g, '');
+        const samePackageName = normalizedType.includes('.')
+            ? normalizedType
+            : (cls.packageName ? `${cls.packageName}.${normalizedType}` : normalizedType);
+        const simpleName = normalizedType.substring(normalizedType.lastIndexOf('.') + 1);
+        const contract = contractsByFqcn.get(samePackageName)
+            ?? contractsByFqcn.get(normalizedType)
+            ?? contractsBySimpleName.get(simpleName)?.[0];
+        if (!contract) {
+            continue;
+        }
+        for (const method of contract.methods) {
+            if (methodNames.has(method.name)) {
+                continue;
+            }
+            methodNames.add(method.name);
+            methods.push({
+                ...method,
+                sourcePath: method.sourcePath ?? contract.filePath,
+                inheritedFrom: buildFqcn(contract.packageName, contract.className),
+                tags: Array.from(new Set([...contract.tags, ...method.tags])),
+                annotations: uniqueAnnotations([...contract.annotations, ...method.annotations]),
+            });
+        }
+    }
+    return methods.length === cls.methods.length ? cls : { ...cls, methods };
+}
+
+function uniqueAnnotations(annotations: readonly SourceAnnotation[]): SourceAnnotation[] {
+    const seen = new Set<string>();
+    return annotations.filter((annotation) => {
+        const key = `${annotation.name}\u0000${annotation.value}`;
+        if (seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
 }
 
 /**

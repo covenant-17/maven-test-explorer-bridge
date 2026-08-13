@@ -215,6 +215,7 @@ export class TestTreeBuilder {
         for (const suite of suiteResults) {
             const claimedByThisSuite = new Set<string>();
             for (const tc of suite.testCases) {
+                if (tc.synthetic) { continue; }
                 const crossSuiteKey = `${tc.className}#${tc.methodName}`;
                 if (claimedByPreviousSuite.has(crossSuiteKey)) { continue; }
                 claimedByThisSuite.add(crossSuiteKey);
@@ -396,7 +397,7 @@ export class TestTreeBuilder {
         const methodItem = this.controller.createTestItem(
             methodId,
             method.displayName ? `$(symbol-method) ${method.displayName}` : `$(symbol-method) ${method.name}()`,
-            classUri,
+            method.sourcePath ? vscode.Uri.file(method.sourcePath) : classUri,
         );
         methodItem.tags = [
             ...new Set([...classTags, ...method.tags]).values(),
