@@ -9,6 +9,16 @@ import { TEST_METADATA_PARTS, TEST_ROW_PARTS, TestMetadataPart, TestRowPart } fr
 
 export const CUSTOM_VIEW_ID = 'mavenTestExplorer.view';
 
+export interface WebviewRunSummary {
+    readonly currentClasses: readonly string[];
+    readonly completedClasses: number;
+    readonly totalClasses: number;
+    readonly startedAt?: number;
+    readonly runDurationMs?: number;
+    readonly testDurationMs?: number;
+    readonly fixtureDurationMs?: number;
+}
+
 export interface WebviewState {
     roots: readonly CustomTestNode[];
     availableTags: readonly string[];
@@ -20,6 +30,7 @@ export interface WebviewState {
     expandedIds: readonly string[];
     selectedId?: string;
     running: boolean;
+    runSummary: WebviewRunSummary;
     viewMode: 'tree' | 'list';
     sortMode: CustomSortMode;
     sortDirection: CustomSortDirection;
@@ -57,6 +68,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         filterText: '',
         expandedIds: [],
         running: false,
+        runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 },
         viewMode: 'tree',
         sortMode: 'location',
         sortDirection: 'asc',
@@ -87,6 +99,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
     updateState(state: WebviewState): void {
         this.state = state;
         this.postState();
+    }
+
+    updateRunSummary(runSummary: WebviewRunSummary): void {
+        this.state = { ...this.state, runSummary };
+        void this.view?.webview.postMessage({ type: 'runSummaryUpdated', runSummary });
     }
 
     revealNode(id: string): void {
@@ -388,6 +405,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             gap: 4px;
             overflow: hidden;
         }
+        .summary-statuses {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 18px;
+            cursor: help;
+        }
         .summary-right {
             flex: 0 0 auto;
             margin-left: auto;
@@ -402,8 +426,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             overflow: hidden;
         }
         .summary-total {
-            margin-left: -2px;
+            margin-left: 2px;
+            padding-left: 6px;
             gap: 1px;
+            border-left: 1px solid var(--vscode-widget-border, var(--vscode-descriptionForeground));
         }
         .summary-count {
             display: inline-flex;
@@ -412,6 +438,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             min-width: 0;
             height: 18px;
             line-height: 16px;
+        }
+        .summary-count,
+        .summary-total,
+        .summary-run-duration {
+            cursor: help;
         }
         .summary .metric-status-icon {
             width: 12px;
@@ -426,7 +457,20 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .virtual-invocations { color: var(--vscode-icon-foreground, var(--vscode-foreground)); }
         .unknown { color: var(--vscode-descriptionForeground); }
         .running-label {
-            color: var(--vscode-testing-runAction, var(--vscode-foreground));
+            height: 18px;
+            padding: 0 6px;
+            font-size: 11px;
+            border: 1px solid color-mix(in srgb, var(--vscode-testing-runAction, var(--vscode-testing-iconPassed)) 55%, transparent);
+            border-radius: 9px;
+            color: var(--vscode-testing-runAction, var(--vscode-testing-iconPassed));
+            background: color-mix(in srgb, var(--vscode-testing-runAction, var(--vscode-testing-iconPassed)) 14%, transparent);
+            cursor: help;
+            overflow: visible;
+        }
+        .running-label:hover,
+        .running-label:focus-visible {
+            border-color: var(--vscode-testing-runAction, var(--vscode-testing-iconPassed));
+            outline: none;
         }
         .filter-error {
             flex: 0 0 auto;
@@ -477,7 +521,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             align-items: center;
             overflow: hidden;
             color: var(--vscode-foreground);
-            cursor: default;
+            cursor: pointer;
             padding-right: 4px;
         }
         .list-separator {
@@ -494,7 +538,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
             border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-sideBar-border, transparent));
             font-size: 0.92em;
-            font-weight: 600;
+            font-weight: normal;
         }
         .list-separator.first {
             border-top-color: transparent;
@@ -563,7 +607,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             opacity: 1;
         }
         .twisty.empty {
-            cursor: default;
+            cursor: inherit;
+            pointer-events: none;
             opacity: 0;
         }
         .status {
@@ -854,9 +899,15 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .node-tooltip-line {
             overflow-wrap: anywhere;
         }
-        .node-tooltip-line:first-child {
+        .node-tooltip-title {
             color: var(--vscode-foreground);
             font-weight: 600;
+            overflow-wrap: anywhere;
+        }
+        .node-tooltip-separator {
+            height: 1px;
+            margin: 5px 0;
+            background: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border, var(--vscode-descriptionForeground)));
         }
         @media (max-width: 260px) {
             .filter-row {
@@ -908,9 +959,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const ROW_HEIGHT = 22;
         const ROW_OVERSCAN = 8;
         const TOOLTIP_LINE_BREAK = String.fromCharCode(10);
+        const TOOLTIP_SEPARATOR = '__MAVEN_TEST_EXPLORER_TOOLTIP_SEPARATOR__';
+        const TOOLTIP_TITLE_PREFIX = '__MAVEN_TEST_EXPLORER_TOOLTIP_TITLE__';
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@executed'];
-        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
         let filterTimer;
         let filterSuggestionItems = [];
         let filterSuggestionIndex = -1;
@@ -931,6 +984,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let submenuTrigger = null;
         let rowsRenderFrame;
         let durationLayoutFrame;
+        let summaryElapsedTimer;
         let renderedRowStart = -1;
         let renderedRowEnd = -1;
 
@@ -948,7 +1002,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const clearFilterButton = document.getElementById('clearFilterButton');
 
         const filterHelpText = [
-            'Filter syntax',
+            TOOLTIP_TITLE_PREFIX + 'Filter syntax',
+            TOOLTIP_SEPARATOR,
             'Type @ to choose tags and annotations.',
             'Comma, AND, or && match all filters.',
             'OR or || matches any filter.',
@@ -1055,6 +1110,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
                 hideNodeTooltip();
                 render(previousTop);
+            } else if (message.type === 'runSummaryUpdated') {
+                state = { ...state, runSummary: message.runSummary || state.runSummary };
+                hideNodeTooltip();
+                renderSummary();
             } else if (message.type === 'revealNode' && message.id) {
                 revealNodeInView(message.id);
             }
@@ -1272,6 +1331,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function renderSummary() {
+            clearInterval(summaryElapsedTimer);
+            summaryElapsedTimer = undefined;
             const stats = state.stats || {};
             const total = stats.total || 0;
             const hasResults = state.running || total > 0;
@@ -1282,46 +1343,131 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
             const left = document.createElement('div');
             left.className = 'summary-left';
-            left.append(
+            const statuses = document.createElement('span');
+            statuses.className = 'summary-statuses';
+            statuses.tabIndex = 0;
+            statuses.setAttribute('aria-label', 'Test result statistics');
+            statuses.append(
                 summaryCount('passed', 'Passed', stats.passed || 0),
                 summaryCount('failed', 'Failed', stats.failed || 0),
                 summaryCount('error', 'Errors', stats.error || 0),
                 summaryCount('skipped', 'Skipped', stats.skipped || 0),
                 summaryTotal(total),
             );
-            if (state.running) {
-                left.appendChild(textSpan('Running', 'summary-group running-label'));
-            }
+            left.appendChild(withInternalTooltip(
+                statuses,
+                'summary-statuses',
+                summaryStatusesTooltip(stats, total),
+            ));
             const right = document.createElement('div');
             right.className = 'summary-right';
-            const duration = totalDuration(state.roots || []);
+            if (state.running) {
+                const runningLabel = textSpan('Running', 'summary-group running-label');
+                runningLabel.tabIndex = 0;
+                runningLabel.setAttribute('aria-label', 'Running test classes and progress');
+                right.appendChild(withInternalTooltip(
+                    runningLabel,
+                    'summary-running',
+                    () => runningTooltip(state.runSummary),
+                ));
+            }
+            const duration = currentRunDuration(state.runSummary) ?? totalDuration(state.roots || []);
             if (duration !== undefined) {
-                right.appendChild(textSpan(formatDuration(duration), 'duration'));
+                const durationLabel = textSpan(formatDuration(duration), 'duration summary-run-duration');
+                right.appendChild(withInternalTooltip(
+                    durationLabel,
+                    'summary-duration',
+                    () => runDurationTooltip(state.runSummary, duration),
+                ));
+                if (state.running && state.runSummary?.startedAt) {
+                    summaryElapsedTimer = setInterval(() => {
+                        const current = currentRunDuration(state.runSummary);
+                        const label = summaryEl.querySelector('.summary-run-duration');
+                        if (label && current !== undefined) {
+                            label.textContent = formatDuration(current);
+                        }
+                    }, 250);
+                }
             }
             const rerunButton = rowAction('codicon-refresh', 'Re-run Failed Tests', () => post('rerunFailed'));
             right.appendChild(withInternalTooltip(rerunButton, 'rerun-failed', 'Re-run Failed Tests'));
             summaryEl.append(left, right);
         }
 
+        function summaryStatusesTooltip(stats, total) {
+            const dynamic = dynamicInvocationCount(state.roots || []);
+            const regular = Math.max(0, total - dynamic);
+            return [
+                'Passed: ' + (stats.passed || 0),
+                'Failed: ' + (stats.failed || 0),
+                'Errors: ' + (stats.error || 0),
+                'Skipped: ' + (stats.skipped || 0),
+                TOOLTIP_SEPARATOR,
+                'Total: ' + total,
+                'Regular tests: ' + regular,
+                'Dynamic invocations: ' + dynamic,
+            ].join(TOOLTIP_LINE_BREAK);
+        }
+
+        function runningTooltip(summary) {
+            const currentClasses = summary?.currentClasses || [];
+            const lines = [TOOLTIP_TITLE_PREFIX + 'Running now', TOOLTIP_SEPARATOR];
+            if (currentClasses.length > 0) {
+                lines.push(...currentClasses.map(className => className));
+            } else {
+                lines.push('Waiting for the next test class');
+            }
+            const noBreakSpace = String.fromCharCode(160);
+            lines.push(
+                [
+                    'Classes',
+                    'tested:',
+                    String(summary?.completedClasses || 0),
+                    'of',
+                    String(summary?.totalClasses || 0),
+                ].join(noBreakSpace),
+            );
+            return lines.join(TOOLTIP_LINE_BREAK);
+        }
+
+        function currentRunDuration(summary) {
+            if (state.running && summary?.startedAt) {
+                return Math.max(0, Date.now() - summary.startedAt);
+            }
+            return typeof summary?.runDurationMs === 'number' ? summary.runDurationMs : undefined;
+        }
+
+        function runDurationTooltip(summary, fallbackDuration) {
+            const fixtureDuration = summary?.fixtureDurationMs;
+            const testDuration = summary?.testDurationMs;
+            const runDuration = currentRunDuration(summary) ?? fallbackDuration;
+            const overheadDuration = typeof runDuration === 'number'
+                && typeof fixtureDuration === 'number'
+                && typeof testDuration === 'number'
+                ? Math.max(0, runDuration - fixtureDuration - testDuration)
+                : undefined;
+            return [
+                'Maven & JVM: ' + (typeof overheadDuration === 'number' ? formatDuration(overheadDuration) : 'not available'),
+                'Fixtures: ' + (typeof fixtureDuration === 'number' ? formatDuration(fixtureDuration) : 'not available'),
+                'Tests: ' + (typeof testDuration === 'number' ? formatDuration(testDuration) : 'not available'),
+                'Total run: ' + (typeof runDuration === 'number' ? formatDuration(runDuration) : 'not available'),
+            ].join(TOOLTIP_LINE_BREAK);
+        }
+
         function summaryCount(kind, label, value) {
             const item = document.createElement('span');
             item.className = 'summary-count';
+            item.setAttribute('aria-label', label + ': ' + value);
             item.append(metricStatusIcon(kind, kind), textSpan(String(value)));
-            return withInternalTooltip(item, 'summary-' + kind, label + ': ' + value);
+            return item;
         }
 
         function summaryTotal(value) {
             const item = document.createElement('span');
             item.className = 'summary-group summary-total';
             item.append(metricTotalIcon(), textSpan(String(value)));
-            const dynamic = dynamicInvocationCount(state.roots || []);
-            const regular = Math.max(0, value - dynamic);
-            const tooltip = [
-                'Total tests: ' + value,
-                'Regular tests: ' + regular,
-                'Dynamic invocations: ' + dynamic,
-            ].join(TOOLTIP_LINE_BREAK);
-            return withInternalTooltip(item, 'summary-total', tooltip);
+            item.setAttribute('aria-label', 'Total tests: ' + value);
+            return item;
         }
 
         function dynamicInvocationCount(nodes) {
@@ -1336,8 +1482,15 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function withInternalTooltip(element, ownerId, text) {
-            element.addEventListener('mouseenter', () => scheduleNodeTooltip(ownerId, text, element));
+            const showTooltip = () => scheduleNodeTooltip(
+                ownerId,
+                typeof text === 'function' ? text() : text,
+                element,
+            );
+            element.addEventListener('mouseenter', showTooltip);
             element.addEventListener('mouseleave', () => hideNodeTooltip(ownerId));
+            element.addEventListener('focus', showTooltip);
+            element.addEventListener('blur', () => hideNodeTooltip(ownerId));
             return element;
         }
 
@@ -1618,9 +1771,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 event.stopPropagation();
                 toggleProject();
             });
+            const projectStatus = iconSpan(
+                projectNode.running ? 'codicon-empty' : statusIcon(projectNode.status),
+                'status ' + (projectNode.running ? 'running' : (projectNode.status || 'unknown')),
+            );
             separator.append(
                 twisty,
-                iconSpan('codicon-root-folder', 'kind-icon'),
+                projectStatus,
+                iconSpan('codicon-root', 'kind-icon'),
                 textSpan(label, 'list-separator-label'),
             );
             const rightMeta = document.createElement('div');
@@ -1657,7 +1815,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const stats = statsForTooltip(node);
             const duration = totalDurationForNode(node);
             return [
-                label,
+                TOOLTIP_TITLE_PREFIX + label,
+                TOOLTIP_SEPARATOR,
                 'Path: ' + node.moduleDir,
                 'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
                 'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
@@ -1719,7 +1878,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
             row.style.top = (index * ROW_HEIGHT) + 'px';
             const tooltip = titleFor(node);
-            row.setAttribute('aria-label', tooltip.split(TOOLTIP_LINE_BREAK).join('. '));
+            row.setAttribute('aria-label', accessibleTooltipText(tooltip));
             row.addEventListener('mouseenter', () => scheduleNodeTooltip(node.id, tooltip, row));
             row.addEventListener('mouseleave', () => hideNodeTooltip(node.id));
             row.addEventListener('focus', () => scheduleNodeTooltip(node.id, tooltip, row));
@@ -1914,8 +2073,16 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             nodeTooltipEl.textContent = '';
             for (const line of String(text).split(TOOLTIP_LINE_BREAK)) {
                 const item = document.createElement('div');
-                item.className = 'node-tooltip-line';
-                item.textContent = line;
+                if (line === TOOLTIP_SEPARATOR) {
+                    item.className = 'node-tooltip-separator';
+                    item.setAttribute('aria-hidden', 'true');
+                } else if (line.startsWith(TOOLTIP_TITLE_PREFIX)) {
+                    item.className = 'node-tooltip-title';
+                    item.textContent = line.substring(TOOLTIP_TITLE_PREFIX.length);
+                } else {
+                    item.className = 'node-tooltip-line';
+                    item.textContent = line;
+                }
                 nodeTooltipEl.appendChild(item);
             }
             nodeTooltipEl.hidden = false;
@@ -1931,6 +2098,16 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const left = anchorRect.left + Math.max(0, (anchorRect.width - nodeTooltipEl.offsetWidth) / 2);
             nodeTooltipEl.style.left = Math.max(margin, Math.min(left, maxLeft)) + 'px';
             nodeTooltipEl.style.top = Math.max(margin, top) + 'px';
+        }
+
+        function accessibleTooltipText(text) {
+            return String(text)
+                .split(TOOLTIP_LINE_BREAK)
+                .filter(line => line !== TOOLTIP_SEPARATOR)
+                .map(line => line.startsWith(TOOLTIP_TITLE_PREFIX)
+                    ? line.substring(TOOLTIP_TITLE_PREFIX.length)
+                    : line)
+                .join('. ');
         }
 
         function hideNodeTooltip(ownerId) {
@@ -2526,7 +2703,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const stats = statsForTooltip(node);
             const duration = totalDurationForNode(node);
             const lines = [
-                fullNameForTooltip(node),
+                TOOLTIP_TITLE_PREFIX + fullNameForTooltip(node),
+                TOOLTIP_SEPARATOR,
                 'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
                 'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
             ];

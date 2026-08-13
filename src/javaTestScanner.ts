@@ -27,6 +27,8 @@ export interface TestClassInfo {
     readonly className: string;
     readonly line: number;
     readonly isInterface: boolean;
+    readonly isAbstract: boolean;
+    readonly extendedTypes: readonly string[];
     readonly implementedTypes: readonly string[];
     readonly displayName: string | undefined;
     readonly tags: readonly string[];
@@ -40,6 +42,8 @@ interface ClassFrame {
     fullName: string;
     line: number;
     isInterface: boolean;
+    isAbstract: boolean;
+    extendedTypes: string[];
     implementedTypes: string[];
     openDepth: number;
     displayName: string | undefined;
@@ -57,6 +61,7 @@ const TAG_ANNOTATION_PATTERN = /@Tag\s*\(\s*"([^"]+)"\s*\)/g;
 const STRING_ANNOTATION_PATTERN = /@(\w+)\s*\(\s*(\{[^}]*\}|"[^"]*")\s*\)/g;
 const STRING_LITERAL_PATTERN = /"([^"]+)"/g;
 const CLASS_DECL_PATTERN = /(?:^|\s)(class|interface)\s+(\w+)/;
+const EXTENDS_PATTERN = /\bextends\s+([^\{]+?)(?=\s+implements\b|\s*\{|$)/;
 const IMPLEMENTS_PATTERN = /\bimplements\s+([^\{]+)/;
 // Matches @Test void method(), @TestFactory Stream<X> method(), default void method()
 const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private|default)\s+)?(?:static\s+)?(?:final\s+)?(?:void|\w[\w.<>,\s]*)\s+(\w+)\s*\(/;
@@ -102,7 +107,7 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     } catch {
         return [];
     }
-    if (!TEST_ANNOTATION_PATTERN.test(content) && !/\bimplements\b/.test(content)) {
+    if (!TEST_ANNOTATION_PATTERN.test(content) && !/\b(?:implements|extends)\b/.test(content)) {
         return [];
     }
 
@@ -179,6 +184,8 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
         if (classMatch && (classStack.length === 0 || pendingNested)) {
             const isInterface = classMatch[1] === 'interface';
             const simpleName = classMatch[2];
+            const isAbstract = !isInterface
+                && new RegExp(`\\babstract\\s+class\\s+${simpleName}\\b`).test(trimmed);
             const parentFull = classStack.length > 0 ? classStack[classStack.length - 1].fullName : '';
             const fullName = parentFull ? `${parentFull}$${simpleName}` : simpleName;
             const declarationSource = lines
@@ -191,6 +198,8 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                 fullName,
                 line: i + 1,
                 isInterface,
+                isAbstract,
+                extendedTypes: parseExtendedTypes(declarationSource),
                 implementedTypes: parseImplementedTypes(declarationSource),
                 openDepth: braceDepth,
                 displayName: pendingDisplayName,
@@ -244,6 +253,8 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
                         className: frame.fullName,
                         line: frame.line,
                         isInterface: frame.isInterface,
+                        isAbstract: frame.isAbstract,
+                        extendedTypes: frame.extendedTypes,
                         implementedTypes: frame.implementedTypes,
                         displayName: frame.displayName,
                         tags: frame.tags,
@@ -264,6 +275,8 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
             className: frame.fullName,
             line: frame.line,
             isInterface: frame.isInterface,
+            isAbstract: frame.isAbstract,
+            extendedTypes: frame.extendedTypes,
             implementedTypes: frame.implementedTypes,
             displayName: frame.displayName,
             tags: frame.tags,
@@ -275,31 +288,42 @@ function parseJavaTestFile(filePath: string): TestClassInfo[] {
     return completed;
 }
 
+function parseExtendedTypes(declaration: string): string[] {
+    const match = EXTENDS_PATTERN.exec(declaration);
+    if (!match) {
+        return [];
+    }
+    return parseTypeList(match[1]);
+}
+
 function parseImplementedTypes(declaration: string): string[] {
     const match = IMPLEMENTS_PATTERN.exec(declaration);
     if (!match) {
         return [];
     }
-    return match[1]
+    return parseTypeList(match[1]);
+}
+
+function parseTypeList(source: string): string[] {
+    return source
         .split(',')
         .map((value) => value.trim().replace(/<.*>/g, ''))
         .filter(Boolean);
 }
 
 function resolveTestContracts(declarations: readonly TestClassInfo[]): TestClassInfo[] {
-    const contracts = declarations.filter((item) => item.isInterface && item.methods.length > 0);
-    const contractsByFqcn = new Map(contracts.map((item) => [buildFqcn(item.packageName, item.className), item]));
-    const contractsBySimpleName = new Map<string, TestClassInfo[]>();
-    for (const contract of contracts) {
-        const simpleName = contract.className.split('$').pop()!;
-        const matches = contractsBySimpleName.get(simpleName) ?? [];
-        matches.push(contract);
-        contractsBySimpleName.set(simpleName, matches);
+    const declarationsByFqcn = new Map(declarations.map((item) => [buildFqcn(item.packageName, item.className), item]));
+    const declarationsBySimpleName = new Map<string, TestClassInfo[]>();
+    for (const declaration of declarations) {
+        const simpleName = declaration.className.split('$').pop()!;
+        const matches = declarationsBySimpleName.get(simpleName) ?? [];
+        matches.push(declaration);
+        declarationsBySimpleName.set(simpleName, matches);
     }
 
     const resolved = declarations
-        .filter((item) => !item.isInterface)
-        .map((item) => inheritContractMethods(item, contractsByFqcn, contractsBySimpleName));
+        .filter((item) => !isDeclarationOnly(item))
+        .map((item) => inheritContractMethods(item, declarationsByFqcn, declarationsBySimpleName));
     const includedNames = new Set(resolved
         .filter((item) => item.methods.length > 0)
         .map((item) => buildFqcn(item.packageName, item.className)));
@@ -316,23 +340,24 @@ function resolveTestContracts(declarations: readonly TestClassInfo[]): TestClass
 
 function inheritContractMethods(
     cls: TestClassInfo,
-    contractsByFqcn: ReadonlyMap<string, TestClassInfo>,
-    contractsBySimpleName: ReadonlyMap<string, readonly TestClassInfo[]>,
+    declarationsByFqcn: ReadonlyMap<string, TestClassInfo>,
+    declarationsBySimpleName: ReadonlyMap<string, readonly TestClassInfo[]>,
 ): TestClassInfo {
     const methods = [...cls.methods];
     const methodNames = new Set(methods.map((method) => method.name));
-    for (const implementedType of cls.implementedTypes) {
-        const normalizedType = implementedType.replace(/\s/g, '');
-        const samePackageName = normalizedType.includes('.')
-            ? normalizedType
-            : (cls.packageName ? `${cls.packageName}.${normalizedType}` : normalizedType);
-        const simpleName = normalizedType.substring(normalizedType.lastIndexOf('.') + 1);
-        const contract = contractsByFqcn.get(samePackageName)
-            ?? contractsByFqcn.get(normalizedType)
-            ?? contractsBySimpleName.get(simpleName)?.[0];
+    const visited = new Set<string>();
+
+    const inheritFrom = (referencedType: string, ownerPackage: string): void => {
+        const contract = resolveReferencedType(ownerPackage, referencedType, declarationsByFqcn, declarationsBySimpleName);
         if (!contract) {
-            continue;
+            return;
         }
+        const contractFqcn = buildFqcn(contract.packageName, contract.className);
+        if (visited.has(contractFqcn)) {
+            return;
+        }
+        visited.add(contractFqcn);
+
         for (const method of contract.methods) {
             if (methodNames.has(method.name)) {
                 continue;
@@ -341,13 +366,40 @@ function inheritContractMethods(
             methods.push({
                 ...method,
                 sourcePath: method.sourcePath ?? contract.filePath,
-                inheritedFrom: buildFqcn(contract.packageName, contract.className),
+                inheritedFrom: method.inheritedFrom ?? contractFqcn,
                 tags: Array.from(new Set([...contract.tags, ...method.tags])),
                 annotations: uniqueAnnotations([...contract.annotations, ...method.annotations]),
             });
         }
+        for (const parentType of [...contract.extendedTypes, ...contract.implementedTypes]) {
+            inheritFrom(parentType, contract.packageName);
+        }
+    };
+
+    for (const inheritedType of [...cls.extendedTypes, ...cls.implementedTypes]) {
+        inheritFrom(inheritedType, cls.packageName);
     }
     return methods.length === cls.methods.length ? cls : { ...cls, methods };
+}
+
+function resolveReferencedType(
+    packageName: string,
+    referencedType: string,
+    declarationsByFqcn: ReadonlyMap<string, TestClassInfo>,
+    declarationsBySimpleName: ReadonlyMap<string, readonly TestClassInfo[]>,
+): TestClassInfo | undefined {
+    const normalizedType = referencedType.replace(/\s/g, '');
+    const samePackageName = normalizedType.includes('.')
+        ? normalizedType
+        : (packageName ? `${packageName}.${normalizedType}` : normalizedType);
+    const simpleName = normalizedType.substring(normalizedType.lastIndexOf('.') + 1);
+    return declarationsByFqcn.get(samePackageName)
+        ?? declarationsByFqcn.get(normalizedType)
+        ?? declarationsBySimpleName.get(simpleName)?.[0];
+}
+
+function isDeclarationOnly(item: TestClassInfo): boolean {
+    return item.isInterface || item.isAbstract;
 }
 
 function uniqueAnnotations(annotations: readonly SourceAnnotation[]): SourceAnnotation[] {

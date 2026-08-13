@@ -20,6 +20,8 @@ export interface TestCaseResult {
 export interface SuiteResult {
     readonly suiteName: string;
     readonly xmlPath: string;
+    /** Surefire's full class/suite duration, including class-level fixtures. */
+    readonly durationMs?: number;
     readonly testCases: readonly TestCaseResult[];
 }
 
@@ -66,6 +68,10 @@ function parseXmlContent(content: string, xmlPath: string): SuiteResult | undefi
     }
 
     const suiteName = String(suite['@_name'] ?? '');
+    const suiteTimeSeconds = Number(suite['@_time'] ?? Number.NaN);
+    const durationMs = Number.isFinite(suiteTimeSeconds)
+        ? Math.max(0, suiteTimeSeconds * 1000)
+        : undefined;
     const rawTestCases = (suite['testcase'] as unknown[]) ?? [];
     const testCases: TestCaseResult[] = [];
 
@@ -77,7 +83,7 @@ function parseXmlContent(content: string, xmlPath: string): SuiteResult | undefi
         }
     }
 
-    return { suiteName, xmlPath, testCases };
+    return { suiteName, xmlPath, durationMs, testCases };
 }
 
 function parseTestCase(tc: Record<string, unknown>): TestCaseResult | undefined {
@@ -89,7 +95,9 @@ function parseTestCase(tc: Record<string, unknown>): TestCaseResult | undefined 
     const methodName = rawName === '' ? '@BeforeAll' : rawName;
     const className = String(tc['@_classname'] ?? '');
     const timeSeconds = Number(tc['@_time'] ?? 0);
-    const durationMs = Math.round(timeSeconds * 1000);
+    // Keep Surefire's sub-millisecond precision. Rounding thousands of fast
+    // tests individually can inflate their aggregate duration by seconds.
+    const durationMs = Math.max(0, timeSeconds * 1000);
 
     const systemOut = extractText(tc['system-out']);
     const systemErr = extractText(tc['system-err']);

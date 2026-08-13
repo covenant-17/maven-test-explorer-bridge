@@ -10,6 +10,11 @@ export interface MavenRunResult {
     readonly cancelled: boolean;
 }
 
+export interface MavenRunProgressHandlers {
+    readonly onClassStarted?: (className: string) => void;
+    readonly onClassCompleted?: (className: string) => void;
+}
+
 /**
  * Spawns a Maven process in the given working directory, streaming output to the provided
  * OutputChannel. Resolves with the exit code when the process finishes.
@@ -18,7 +23,8 @@ export interface MavenRunResult {
  */
 // Surefire per-class summary line, e.g.:
 //   Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 30.5 s -- in tests.MyTest
-const SUREFIRE_CLASS_SUMMARY = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+).*-- in\s+\S+/;
+const SUREFIRE_CLASS_START = /(?:^|\s)Running\s+([\w.$]+)\s*$/;
+const SUREFIRE_CLASS_SUMMARY = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+).*-- in\s+([\w.$]+)/;
 
 export function runMaven(
     cwd: string,
@@ -26,6 +32,7 @@ export function runMaven(
     outputChannel: vscode.OutputChannel,
     token: vscode.CancellationToken,
     totalExpected?: number,
+    progressHandlers?: MavenRunProgressHandlers,
 ): Promise<MavenRunResult> {
     return new Promise((resolve) => {
         const executable = args[0];
@@ -57,7 +64,13 @@ export function runMaven(
                 const line = stdoutBuf.slice(0, newlineIdx);
                 stdoutBuf = stdoutBuf.slice(newlineIdx + 1);
 
-                const m = SUREFIRE_CLASS_SUMMARY.exec(line);
+                const progressLine = line.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').trim();
+                const started = SUREFIRE_CLASS_START.exec(progressLine);
+                if (started) {
+                    progressHandlers?.onClassStarted?.(started[1]);
+                }
+
+                const m = SUREFIRE_CLASS_SUMMARY.exec(progressLine);
                 if (m) {
                     const classTotal    = parseInt(m[1], 10);
                     const classFailed   = parseInt(m[2], 10);
@@ -78,6 +91,7 @@ export function runMaven(
                         parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
                     }
                     outputChannel.appendLine(`[Progress] ${parts.join('  ')}`);
+                    progressHandlers?.onClassCompleted?.(m[5]);
                 }
             }
         });

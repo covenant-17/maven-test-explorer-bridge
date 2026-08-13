@@ -58,7 +58,11 @@ import {
     ModuleClasses,
     nodePathLabel,
 } from './customTestModel';
-import { CUSTOM_VIEW_ID, CustomTestWebviewProvider } from './customTestWebview';
+import {
+    CUSTOM_VIEW_ID,
+    CustomTestWebviewProvider,
+    WebviewRunSummary,
+} from './customTestWebview';
 import {
     CONFIGURABLE_TEST_ROW_PARTS,
     normalizeTestMetadataParts,
@@ -90,6 +94,12 @@ let selectedNodeId: string | undefined;
 let running = false;
 let runtimeRunningNodeIds = new Set<string>();
 let runtimeResultByXmlPath = new Map<string, SuiteResult>();
+let runStartedAt: number | undefined;
+let lastRunDurationMs: number | undefined;
+let lastRunResults: SuiteResult[] = [];
+let totalRunClasses = 0;
+const currentRunClasses = new Set<string>();
+const completedRunClasses = new Set<string>();
 let selectedNodePersistTimer: ReturnType<typeof setTimeout> | undefined;
 
 const resultCache = new Map<string, SuiteResult>();
@@ -227,6 +237,7 @@ function rebuildTree(): void {
         expandedIds: Array.from(expandedIds),
         selectedId: selectedNodeId,
         running,
+        runSummary: buildWebviewRunSummary(),
         viewMode: activeViewMode,
         sortMode: activeSortMode,
         sortDirection: activeSortDirection,
@@ -584,6 +595,12 @@ async function runTargets(
     running = true;
     runtimeRunningNodeIds = new Set(executionTargets.flatMap((target) => target.runningNodeIds ?? []));
     runtimeResultByXmlPath = new Map();
+    runStartedAt = Date.now();
+    lastRunDurationMs = undefined;
+    lastRunResults = [];
+    currentRunClasses.clear();
+    completedRunClasses.clear();
+    totalRunClasses = expectedClassCount(runtimeRunningNodeIds);
     rebuildTree();
 
     const cancellationSource = new vscode.CancellationTokenSource();
@@ -631,6 +648,17 @@ async function runTargets(
                     outputChannel,
                     cancellationSource.token,
                     target.expectedTestCount,
+                    {
+                        onClassStarted: (className) => {
+                            currentRunClasses.add(className);
+                            provider?.updateRunSummary(buildWebviewRunSummary());
+                        },
+                        onClassCompleted: (className) => {
+                            currentRunClasses.delete(className);
+                            completedRunClasses.add(className);
+                            provider?.updateRunSummary(buildWebviewRunSummary());
+                        },
+                    },
                 );
                 poller.flush();
                 if (!result.cancelled) {
@@ -666,7 +694,11 @@ async function runTargets(
             }
         } finally {
             inlineRun.end();
+            lastRunDurationMs = runStartedAt === undefined ? undefined : Date.now() - runStartedAt;
+            lastRunResults = [...allResults];
             running = false;
+            runStartedAt = undefined;
+            currentRunClasses.clear();
             runtimeRunningNodeIds = new Set();
             runtimeResultByXmlPath = new Map();
             rebuildTree();
@@ -691,6 +723,71 @@ function expectedTestCount(runningNodeIds: readonly string[]): number {
         }
     }
     return total;
+}
+
+function expectedClassCount(runningNodeIds: ReadonlySet<string>): number {
+    const classNames = new Set<string>();
+    for (const id of runningNodeIds) {
+        const node = currentTree.nodesById.get(id);
+        if (node?.fqcn && (node.kind === 'class'
+            || node.kind === 'method'
+            || node.kind === 'virtualMethod'
+            || node.kind === 'lifecycle')) {
+            classNames.add(node.fqcn);
+        }
+    }
+    return classNames.size;
+}
+
+function buildWebviewRunSummary(): WebviewRunSummary {
+    const suiteResults = running
+        ? Array.from(runtimeResultByXmlPath.values())
+        : (lastRunResults.length > 0 ? lastRunResults : Array.from(resultCache.values()));
+    const timing = calculateSuiteTiming(suiteResults);
+    const fallbackRunDuration = timing.suiteDurationMs;
+    return {
+        currentClasses: Array.from(currentRunClasses).sort((left, right) => left.localeCompare(right)),
+        completedClasses: completedRunClasses.size,
+        totalClasses: totalRunClasses,
+        startedAt: runStartedAt,
+        runDurationMs: running ? undefined : (lastRunDurationMs ?? fallbackRunDuration),
+        testDurationMs: timing.testDurationMs,
+        fixtureDurationMs: timing.fixtureDurationMs,
+    };
+}
+
+function calculateSuiteTiming(suiteResults: readonly SuiteResult[]): {
+    testDurationMs?: number;
+    fixtureDurationMs?: number;
+    suiteDurationMs?: number;
+} {
+    if (suiteResults.length === 0) {
+        return {};
+    }
+    let testDurationMs = 0;
+    let fixtureDurationMs = 0;
+    let suitesWithDuration = 0;
+    for (const suite of suiteResults) {
+        // Surefire can emit empty parent-container reports whose time already
+        // includes nested suites. Counting them would duplicate both fixture
+        // and fallback run duration.
+        if (suite.testCases.length === 0) {
+            continue;
+        }
+        const ordinaryTestDuration = suite.testCases
+            .filter((testCase) => !testCase.synthetic && !testCase.methodName.startsWith('@'))
+            .reduce((sum, testCase) => sum + testCase.durationMs, 0);
+        testDurationMs += ordinaryTestDuration;
+        if (typeof suite.durationMs === 'number') {
+            suitesWithDuration++;
+            fixtureDurationMs += Math.max(0, suite.durationMs - ordinaryTestDuration);
+        }
+    }
+    return {
+        testDurationMs,
+        fixtureDurationMs: suitesWithDuration > 0 ? fixtureDurationMs : undefined,
+        suiteDurationMs: suitesWithDuration > 0 ? testDurationMs + fixtureDurationMs : testDurationMs,
+    };
 }
 
 function addSkippedResultsForLifecycleFailures(
@@ -1042,6 +1139,10 @@ function metadataPartDescription(part: TestMetadataPart): string {
 async function clearResults(context: vscode.ExtensionContext, withHistory: boolean): Promise<void> {
     resultCache.clear();
     lastFailedClassNames.clear();
+    lastRunResults = [];
+    lastRunDurationMs = undefined;
+    totalRunClasses = 0;
+    completedRunClasses.clear();
     await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
     if (withHistory) {
         clearHistory(context);
@@ -1069,6 +1170,10 @@ async function showHistory(context: vscode.ExtensionContext): Promise<void> {
     }
     resultCache.clear();
     updateResultCache(selected.entry.suiteResults, new Set());
+    lastRunResults = [...selected.entry.suiteResults];
+    lastRunDurationMs = undefined;
+    totalRunClasses = new Set(selected.entry.suiteResults.map((suite) => suite.suiteName)).size;
+    completedRunClasses.clear();
     updateFailedClasses(selected.entry.suiteResults);
     await saveResultCache(context);
     rebuildTree();
@@ -1323,6 +1428,10 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
                 .filter((module) => changedModuleDirs.has(module.moduleDir))
                 .flatMap((module) => readAllReports(module.moduleDir, reportGlobs));
             updateResultCache(changedResults, changedModuleDirs);
+            if (!running) {
+                lastRunResults = [];
+                lastRunDurationMs = undefined;
+            }
             updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
             rebuildTree();
@@ -1371,6 +1480,8 @@ async function reloadConfiguredReports(context: vscode.ExtensionContext): Promis
     const results = currentModules.flatMap((module) => readAllReports(module.moduleDir, reportGlobs));
     resultCache.clear();
     updateResultCache(results, new Set());
+    lastRunResults = [];
+    lastRunDurationMs = undefined;
     updateFailedClasses(results);
     await saveResultCache(context);
     rebuildTree();
