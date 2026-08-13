@@ -18,6 +18,7 @@ import { readSettings } from './settings';
 import {
     CMD_ATTACH_TO_CLAUDE,
     CMD_ATTACH_TO_COPILOT,
+    CMD_REVEAL_IN_CUSTOM_EXPLORER,
     CMD_CLEAN_REPORTS,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
@@ -330,6 +331,43 @@ function customNodeIdForInlineItem(item: vscode.TestItem): string | undefined {
         }
     }
     return currentTree.nodesById.has(item.id) ? item.id : undefined;
+}
+
+async function revealInlineItemInCustomExplorer(
+    context: vscode.ExtensionContext,
+    item: vscode.TestItem | undefined,
+): Promise<void> {
+    if (!item) {
+        return;
+    }
+    const id = customNodeIdForInlineItem(item);
+    const node = id ? currentTree.nodesById.get(id) : undefined;
+    if (!node) {
+        vscode.window.showInformationMessage('Maven Test Explorer: Test is not present in the custom view.');
+        return;
+    }
+
+    let parentId = node.parentId;
+    while (parentId) {
+        expandedIds.add(parentId);
+        parentId = currentTree.nodesById.get(parentId)?.parentId;
+    }
+    selectedNodeId = node.id;
+    if (!containsNode(currentTree.filteredRoots, node.id)) {
+        activeFilterExpression = '';
+    }
+    await Promise.all([
+        context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds)),
+        context.workspaceState.update(SELECTED_ID_KEY, selectedNodeId),
+        context.workspaceState.update(FILTER_KEY, activeFilterExpression),
+    ]);
+    rebuildTree();
+    await vscode.commands.executeCommand(`${CUSTOM_VIEW_ID}.focus`);
+    provider.revealNode(node.id);
+}
+
+function containsNode(nodes: readonly CustomTestNode[], id: string): boolean {
+    return nodes.some((node) => node.id === id || containsNode(node.children, id));
 }
 
 function inlineItemIdForNode(node: CustomTestNode): string | undefined {
@@ -835,6 +873,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_COPY_FULL_PATH, () => copyNode('file')),
         vscode.commands.registerCommand(CMD_ATTACH_TO_COPILOT, () => attachNode('copilot')),
         vscode.commands.registerCommand(CMD_ATTACH_TO_CLAUDE, () => attachNode('claude')),
+        vscode.commands.registerCommand(
+            CMD_REVEAL_IN_CUSTOM_EXPLORER,
+            (item: vscode.TestItem) => revealInlineItemInCustomExplorer(context, item),
+        ),
     );
 }
 
@@ -1020,7 +1062,7 @@ async function copyTextForNode(kind: string, node: CustomTestNode): Promise<stri
         case 'package':
             return node.packageName;
         case 'file':
-            return node.sourcePath;
+            return fullPathForNode(node);
         case 'path':
         default:
             return nodePathLabel(node);
@@ -1198,6 +1240,33 @@ function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs
         }
         resultCache.set(cacheKey, { ...suite, testCases: Array.from(cases.values()) });
     }
+}
+
+function fullPathForNode(node: CustomTestNode): string | undefined {
+    if (node.sourcePath) {
+        return node.sourcePath;
+    }
+    if (node.kind === 'module') {
+        return node.moduleDir;
+    }
+    if (node.kind === 'package') {
+        const descendantSourcePath = firstDescendantSourcePath(node);
+        return descendantSourcePath ? path.dirname(descendantSourcePath) : node.moduleDir;
+    }
+    return undefined;
+}
+
+function firstDescendantSourcePath(node: CustomTestNode): string | undefined {
+    for (const child of node.children) {
+        if (child.sourcePath) {
+            return child.sourcePath;
+        }
+        const nestedPath = firstDescendantSourcePath(child);
+        if (nestedPath) {
+            return nestedPath;
+        }
+    }
+    return undefined;
 }
 
 function indexTestCases(testCases: readonly TestCaseResult[]): Array<[string, TestCaseResult]> {

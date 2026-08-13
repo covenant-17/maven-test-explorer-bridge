@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -212,6 +212,12 @@
         "title": "Attach to Claude",
         "category": "Maven Test Explorer",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "mavenTestExplorer.revealInCustomExplorer",
+        "title": "Reveal in Maven Test Explorer",
+        "category": "Maven Test Explorer",
+        "icon": "$(list-tree)"
       }
     ],
     "views": {
@@ -281,6 +287,13 @@
           "command": "mavenTestExplorer.showTreeView",
           "group": "navigation@8",
           "when": "view == mavenTestExplorer.view && mavenTestExplorer.viewMode == list"
+        }
+      ],
+      "testing/item/gutter": [
+        {
+          "command": "mavenTestExplorer.revealInCustomExplorer",
+          "group": "navigation@1",
+          "when": "controllerId == mavenTestExplorer"
         }
       ],
       "mavenTestExplorer.sortMenu": [

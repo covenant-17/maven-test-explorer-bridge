@@ -81,6 +81,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         this.postState();
     }
 
+    revealNode(id: string): void {
+        this.view?.show(false);
+        void this.view?.webview.postMessage({ type: 'revealNode', id });
+    }
+
     private postState(): void {
         this.view?.webview.postMessage({ type: 'stateUpdated', state: this.state });
     }
@@ -378,6 +383,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .summary-left {
             flex: 1 1 auto;
+            gap: 4px;
             overflow: hidden;
         }
         .summary-right {
@@ -394,7 +400,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             overflow: hidden;
         }
         .summary-total {
-            margin-left: -4px;
+            margin-left: -2px;
+            gap: 1px;
         }
         .summary-count {
             display: inline-flex;
@@ -404,12 +411,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             height: 18px;
             line-height: 16px;
         }
-        .summary .codicon {
-            width: 14px;
-            height: 14px;
-            flex-basis: 14px;
-            font-size: 14px;
-            line-height: 14px;
+        .summary .metric-status-icon {
+            width: 12px;
+            height: 12px;
+            flex-basis: 12px;
             align-self: center;
         }
         .passed { color: var(--vscode-testing-iconPassed); }
@@ -644,6 +649,26 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .right-meta > span {
             flex: 0 0 auto;
+        }
+        .meta-part {
+            display: inline-flex;
+            align-items: center;
+            gap: 1px;
+        }
+        .meta-part .metric-status-icon {
+            width: 12px;
+            height: 12px;
+            flex: 0 0 12px;
+        }
+        .metric-status-icon,
+        .metric-total-icon {
+            display: inline-block;
+            overflow: visible;
+        }
+        .metric-total-icon {
+            width: 12px;
+            height: 12px;
+            flex: 0 0 12px;
         }
         .row.selected .right-meta {
             color: inherit;
@@ -971,6 +996,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
                 hideNodeTooltip();
                 render(previousTop);
+            } else if (message.type === 'revealNode' && message.id) {
+                revealNodeInView(message.id);
             }
         });
 
@@ -1220,12 +1247,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function summaryCount(kind, label, value) {
             const item = document.createElement('span');
             item.className = 'summary-count';
-            item.append(iconSpan(statusIcon(kind), kind), textSpan(String(value)));
+            item.append(metricStatusIcon(kind, kind), textSpan(String(value)));
             return withInternalTooltip(item, 'summary-' + kind, label + ': ' + value);
         }
 
         function summaryTotal(value) {
-            const item = textSpan('Σ' + value, 'summary-group summary-total');
+            const item = document.createElement('span');
+            item.className = 'summary-group summary-total';
+            item.append(metricTotalIcon(), textSpan(String(value)));
             const dynamic = dynamicInvocationCount(state.roots || []);
             const regular = Math.max(0, value - dynamic);
             const tooltip = [
@@ -1718,7 +1747,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 appendMetaPart(container, stats.failed || 0, 'failed');
                 appendMetaPart(container, stats.error || 0, 'error');
                 appendMetaPart(container, stats.skipped || 0, 'skipped');
-                const total = textSpan('Σ' + String(stats.total), 'meta-total');
+                const total = document.createElement('span');
+                total.className = 'meta-part meta-total';
+                total.append(metricTotalIcon(), textSpan(String(stats.total)));
                 container.appendChild(total);
                 return;
             }
@@ -1731,16 +1762,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (!value) {
                 return;
             }
-            const span = textSpan(metaPrefix(kind) + String(value), 'meta-' + kind);
+            const span = document.createElement('span');
+            span.className = 'meta-part meta-' + kind;
+            span.append(metricStatusIcon(kind), textSpan(String(value)));
             container.appendChild(span);
-        }
-
-        function metaPrefix(kind) {
-            if (kind === 'passed') return '✓';
-            if (kind === 'failed') return 'X';
-            if (kind === 'error') return '!';
-            if (kind === 'skipped') return '○';
-            return '';
         }
 
         function rowAction(iconClass, title, onClick) {
@@ -2015,6 +2040,20 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             hideNodeTooltip();
             hideCopyMenu();
             menuNode = node;
+            if (copyOptions(node).length > 0) {
+                const copyItem = menuItem('codicon-copy', 'Copy...');
+                copyItem.appendChild(iconSpan('codicon-chevron-right', 'menu-chevron'));
+                copyItem.addEventListener('mouseenter', () => showCopySubmenu(node, copyItem));
+                copyItem.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    showCopySubmenu(node, copyItem);
+                    setSubmenuIndex(0);
+                });
+                copyMenuEl.appendChild(copyItem);
+                menuItems.push(copyItem);
+                submenuTrigger = copyItem;
+                appendMenuSeparator(copyMenuEl);
+            }
             const runIds = selectedNodeIds.has(node.id)
                 ? Array.from(selectedNodeIds)
                 : [node.id];
@@ -2040,20 +2079,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 if (node.inheritedFrom) {
                     appendGoToItem(node, 'Go to Test Class', 'class');
                 }
-            }
-            if (copyOptions(node).length > 0) {
-                appendMenuSeparator(copyMenuEl);
-                const copyItem = menuItem('codicon-copy', 'Copy...');
-                copyItem.appendChild(iconSpan('codicon-chevron-right', 'menu-chevron'));
-                copyItem.addEventListener('mouseenter', () => showCopySubmenu(node, copyItem));
-                copyItem.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    showCopySubmenu(node, copyItem);
-                    setSubmenuIndex(0);
-                });
-                copyMenuEl.appendChild(copyItem);
-                menuItems.push(copyItem);
-                submenuTrigger = copyItem;
             }
             menuItems.forEach((item, index) => {
                 item.addEventListener('mouseenter', () => {
@@ -2228,7 +2253,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (kind === 'maven') return true;
             if (kind === 'package') return Boolean(node.packageName);
             if (kind === 'class') return Boolean(node.fqcn);
-            if (kind === 'file') return Boolean(node.sourcePath);
+            if (kind === 'file') return Boolean(node.sourcePath)
+                || node.kind === 'package'
+                || node.kind === 'module';
             if (kind === 'method') return Boolean(node.methodName);
             return true;
         }
@@ -2243,6 +2270,20 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             return !hasChildren && (node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle');
         }
 
+        function revealNodeInView(id) {
+            const index = flatRows.findIndex(entry => entry.node?.id === id);
+            if (index < 0) {
+                return;
+            }
+            selectedNodeIds = new Set([id]);
+            selectionAnchorId = id;
+            state = { ...state, selectedId: id };
+            scrollRowIntoView(index);
+            renderVisibleRows(true);
+            updateSelectedRows();
+            treeEl.focus();
+        }
+
         function isExpanded(id) {
             return expandedIdSet.has(id);
         }
@@ -2255,6 +2296,59 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             const span = document.createElement('span');
             span.className = ('codicon ' + iconClass + ' ' + extraClass).trim();
             return span;
+        }
+
+        function metricStatusIcon(kind, extraClass = '') {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 16 16');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', 'currentColor');
+            svg.setAttribute('stroke-width', '1.55');
+            svg.setAttribute('stroke-linecap', 'round');
+            svg.setAttribute('stroke-linejoin', 'round');
+            svg.setAttribute('class', ('metric-status-icon ' + extraClass).trim());
+
+            if (kind === 'passed') {
+                appendSvgPath(svg, 'M2.75 8.25 6.25 11.75 13.25 4.25');
+                return svg;
+            }
+            if (kind === 'failed') {
+                appendSvgPath(svg, 'M3 3 13 13M13 3 3 13');
+                return svg;
+            }
+
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', '8');
+            circle.setAttribute('cy', '8');
+            circle.setAttribute('r', '6.15');
+            svg.appendChild(circle);
+            if (kind === 'error') {
+                appendSvgPath(svg, 'M5.25 5.25 10.75 10.75M10.75 5.25 5.25 10.75');
+            } else if (kind === 'skipped') {
+                appendSvgPath(svg, 'M3.65 12.35 12.35 3.65');
+            }
+            return svg;
+        }
+
+        function metricTotalIcon() {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 16 16');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', 'currentColor');
+            svg.setAttribute('stroke-width', '1.55');
+            svg.setAttribute('stroke-linecap', 'round');
+            svg.setAttribute('stroke-linejoin', 'round');
+            svg.setAttribute('class', 'metric-total-icon');
+            appendSvgPath(svg, 'M12.75 3.25H3.5L8 8 3.5 12.75H12.75');
+            return svg;
+        }
+
+        function appendSvgPath(svg, data) {
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', data);
+            svg.appendChild(path);
         }
 
         function textSpan(value, className = '') {

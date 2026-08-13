@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -30,14 +30,15 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 - **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
 - **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes), dynamic invocations, and inherited test-interface methods
 - **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported
-- **Aggregate stats** — each tree node shows `| ✓N | ✗N | = N | T` counts at a glance
+- **Aggregate stats** — the header and expandable nodes show compact passed, failed, errored, skipped, and total counts at a glance
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
 - **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
 - **Flexible sorting** — sort by source location, status, duration, or name with independent ascending and descending directions
 - **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
-- **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
+- **Copy...** — the first context-menu action copies Maven commands, package names, class names (FQCN), full paths, or method names; full paths are also available for projects and packages, and multi-selection is supported
+- **Inline reveal** — editor test actions reveal and focus the matching item in the dedicated Maven Test Explorer view
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
 - **JUnit `@Tag` filtering** — class and method tags are available from the custom filter input with project-scoped names such as `@javatest.smoke`; suggestions include contextual match counts, and method-level filters include inherited class tags

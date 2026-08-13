@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.2] - 2026-08-13
+
+### Improved
+
+- **Explorer navigation** - inline test actions now reveal and focus the matching item in the dedicated Maven Test Explorer view.
+- **Context actions** - `Copy...` is now the first context-menu entry, and full paths can be copied for projects and packages as well as source-backed test nodes.
+- **Aggregate statistics** - header and expandable-node counters now share compact, consistently aligned SVG icons for passed, failed, errored, skipped, and total results.
+
+---
+
 ## [1.0.1] - 2026-08-13
 
 ### Added
