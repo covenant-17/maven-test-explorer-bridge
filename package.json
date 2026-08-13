@@ -127,6 +127,18 @@
         "icon": "$(watch)"
       },
       {
+        "command": "mavenTestExplorer.showListView",
+        "title": "Show List View",
+        "category": "Maven Test Explorer",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "mavenTestExplorer.showTreeView",
+        "title": "Show Tree View",
+        "category": "Maven Test Explorer",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "mavenTestExplorer.rerunFailed",
         "title": "Maven: Re-run Failed Tests",
         "category": "Maven Test Explorer"
@@ -215,7 +227,7 @@
       {
         "id": "mavenTestExplorer.sortMenu",
         "label": "Sort Tests",
-        "icon": "$(list-tree)"
+        "icon": "$(sort-precedence)"
       },
       {
         "id": "mavenTestExplorer.clearMenu",
@@ -259,6 +271,16 @@
           "command": "mavenTestExplorer.showHistory",
           "group": "navigation@3",
           "when": "view == mavenTestExplorer.view"
+        },
+        {
+          "command": "mavenTestExplorer.showListView",
+          "group": "navigation@8",
+          "when": "view == mavenTestExplorer.view && mavenTestExplorer.viewMode == tree"
+        },
+        {
+          "command": "mavenTestExplorer.showTreeView",
+          "group": "navigation@8",
+          "when": "view == mavenTestExplorer.view && mavenTestExplorer.viewMode == list"
         }
       ],
       "mavenTestExplorer.sortMenu": [
@@ -388,6 +410,14 @@
         },
         {
           "command": "mavenTestExplorer.sortByNameDesc",
+          "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.showListView",
+          "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.showTreeView",
           "when": "false"
         }
       ]

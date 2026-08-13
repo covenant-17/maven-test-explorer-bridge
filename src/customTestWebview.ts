@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
-import { CustomNodeStats, CustomTestNode } from './customTestModel';
+import {
+    CustomNodeStats,
+    CustomSortDirection,
+    CustomSortMode,
+    CustomTestNode,
+} from './customTestModel';
 
 export const CUSTOM_VIEW_ID = 'mavenTestExplorer.view';
 
@@ -14,6 +19,9 @@ export interface WebviewState {
     expandedIds: readonly string[];
     selectedId?: string;
     running: boolean;
+    viewMode: 'tree' | 'list';
+    sortMode: CustomSortMode;
+    sortDirection: CustomSortDirection;
 }
 
 export interface WebviewHandlers {
@@ -45,6 +53,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         filterText: '',
         expandedIds: [],
         running: false,
+        viewMode: 'tree',
+        sortMode: 'location',
+        sortDirection: 'asc',
     };
 
     constructor(
@@ -295,7 +306,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             background: var(--vscode-toolbar-hoverBackground);
         }
         .icon-button:focus-visible,
-        .row:focus-visible {
+        .row:focus-visible,
+        .list-separator.project:focus-visible {
             outline: 1px solid var(--vscode-focusBorder);
             outline-offset: -1px;
         }
@@ -459,6 +471,38 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             cursor: default;
             padding-right: 4px;
         }
+        .list-separator {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            height: var(--row-height);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 0 8px;
+            overflow: hidden;
+            color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-descriptionForeground));
+            background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
+            border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-sideBar-border, transparent));
+            font-size: 0.92em;
+            font-weight: 600;
+        }
+        .list-separator.first {
+            border-top-color: transparent;
+        }
+        .list-separator.project {
+            --action-zone: 28px;
+            color: var(--vscode-foreground);
+            font-size: 0.95em;
+            cursor: pointer;
+        }
+        .list-separator-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .row:hover:not(.selected) {
             color: var(--vscode-list-hoverForeground, var(--vscode-foreground));
             background: var(--vscode-list-hoverBackground);
@@ -549,7 +593,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .label-text,
         .description,
         .tags,
-        .node-stats {
+        .node-stats,
+        .class-context {
             min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -560,15 +605,20 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .description,
         .tags,
-        .node-stats {
+        .node-stats,
+        .class-context {
             flex: 0 1 auto;
             color: var(--vscode-descriptionForeground);
             margin-left: 4px;
             font-size: 0.92em;
         }
+        .class-context {
+            opacity: 0.78;
+        }
         .row.selected .description,
         .row.selected .tags,
-        .row.selected .node-stats {
+        .row.selected .node-stats,
+        .row.selected .class-context {
             color: inherit;
             opacity: 0.9;
         }
@@ -600,6 +650,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .row:focus-within .right-meta {
             margin-right: var(--action-zone);
         }
+        .list-separator:hover .right-meta,
+        .list-separator:focus-within .right-meta {
+            margin-right: calc(var(--action-zone) - 8px);
+        }
         .meta-passed { color: var(--vscode-testing-iconPassed); }
         .meta-failed { color: var(--vscode-testing-iconFailed); }
         .meta-error { color: var(--vscode-testing-iconErrored, var(--vscode-testing-iconFailed)); }
@@ -627,7 +681,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             background: transparent;
         }
         .row:hover .actions,
-        .row:focus-within .actions {
+        .row:focus-within .actions,
+        .list-separator:hover .actions,
+        .list-separator:focus-within .actions {
             opacity: 1;
             pointer-events: auto;
         }
@@ -767,7 +823,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const TOOLTIP_LINE_BREAK = String.fromCharCode(10);
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@executed'];
-        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '' };
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc' };
         let filterTimer;
         let filterSuggestionItems = [];
         let filterSuggestionIndex = -1;
@@ -884,7 +940,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (message.type === 'stateUpdated') {
                 const previousTop = treeEl.scrollTop;
                 state = message.state || state;
-                const visibleIds = new Set(flattenRoots(state.roots || []).map(entry => entry.node.id));
+                const visibleEntries = state.viewMode === 'list'
+                    ? flattenListRoots(state.roots || [])
+                    : flattenRoots(state.roots || []);
+                const visibleIds = new Set(visibleEntries
+                    .filter(entry => entry.node)
+                    .map(entry => entry.node.id));
                 selectedNodeIds = new Set(Array.from(selectedNodeIds).filter(id => visibleIds.has(id)));
                 if (selectedNodeIds.size === 0 && state.selectedId && visibleIds.has(state.selectedId)) {
                     selectedNodeIds.add(state.selectedId);
@@ -1170,8 +1231,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function renderRows(previousTop) {
             rowsEl.replaceChildren();
-            flatRows = flattenRoots(state.roots || []);
-            activeGuideParentId = findParentId(state.roots || [], state.selectedId);
+            const listMode = state.viewMode === 'list';
+            treeEl.setAttribute('role', listMode ? 'listbox' : 'tree');
+            treeEl.setAttribute('aria-label', listMode
+                ? 'Maven Test Explorer list'
+                : 'Maven Test Explorer tree');
+            flatRows = listMode ? flattenListRoots(state.roots || []) : flattenRoots(state.roots || []);
+            activeGuideParentId = listMode ? undefined : findParentId(state.roots || [], state.selectedId);
 
             if (flatRows.length === 0) {
                 rowsEl.style.height = '100%';
@@ -1181,7 +1247,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
 
             rowsEl.style.height = Math.max(flatRows.length * ROW_HEIGHT, treeEl.clientHeight) + 'px';
-            flatRows.forEach((entry, index) => rowsEl.appendChild(renderNode(entry, index)));
+            flatRows.forEach((entry, index) => rowsEl.appendChild(
+                entry.separator ? renderListSeparator(entry, index) : renderNode(entry, index),
+            ));
             treeEl.scrollTop = Math.min(previousTop, Math.max(0, rowsEl.offsetHeight - treeEl.clientHeight));
             updateActiveDescendant();
         }
@@ -1192,6 +1260,224 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 flattenNode(node, 0, output, []);
             }
             return output;
+        }
+
+        function flattenListRoots(roots) {
+            const output = [];
+            const collect = (node, methods, grouped) => {
+                if (node.kind === 'class') {
+                    const classMethods = (node.children || []).filter(child => (
+                        child.kind === 'method' || child.kind === 'virtualMethod'
+                    ));
+                    if (classMethods.length > 0) {
+                        if (grouped) {
+                            output.push({ separator: true, classNode: node });
+                        }
+                        for (const method of classMethods) {
+                            const entry = {
+                                node: method,
+                                classNode: node,
+                                depth: 0,
+                                ancestorIds: [],
+                                listMode: true,
+                            };
+                            if (grouped) {
+                                output.push(entry);
+                            } else {
+                                methods.push(entry);
+                            }
+                        }
+                    }
+                }
+                for (const child of node.children || []) {
+                    collect(child, methods, grouped);
+                }
+            };
+            for (const root of roots) {
+                output.push({ separator: true, projectNode: root });
+                if (!isExpanded(root.id)) {
+                    continue;
+                }
+                const grouped = state.sortMode === 'location';
+                const methods = [];
+                collect(root, methods, grouped);
+                if (!grouped) {
+                    methods.sort(compareFlatMethodEntries);
+                    output.push(...methods);
+                }
+            }
+            return output;
+        }
+
+        function compareFlatMethodEntries(a, b) {
+            const aNode = a.node;
+            const bNode = b.node;
+            let delta = 0;
+            if (state.sortMode === 'name') {
+                delta = compareListText(aNode.label, bNode.label);
+            } else if (state.sortMode === 'status') {
+                delta = flatStatusRank(aNode.status) - flatStatusRank(bNode.status);
+            } else if (state.sortMode === 'duration') {
+                delta = (totalDurationForNode(aNode) || 0) - (totalDurationForNode(bNode) || 0);
+            }
+            if (delta !== 0) {
+                return state.sortDirection === 'asc' ? delta : -delta;
+            }
+            const nameDelta = compareListText(aNode.label, bNode.label);
+            if (nameDelta !== 0) {
+                return nameDelta;
+            }
+            const classDelta = compareListText(listClassLabel(a.classNode), listClassLabel(b.classNode));
+            if (classDelta !== 0) {
+                return classDelta;
+            }
+            return (aNode.line || 0) - (bNode.line || 0);
+        }
+
+        function compareListText(a, b) {
+            return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
+        }
+
+        function flatStatusRank(status) {
+            if (status === 'error') return 4;
+            if (status === 'failed') return 3;
+            if (status === 'skipped') return 2;
+            if (status === 'passed') return 1;
+            return 0;
+        }
+
+        function renderListSeparator(entry, index) {
+            if (entry.projectNode) {
+                return renderProjectSeparator(entry.projectNode, index);
+            }
+            const separator = document.createElement('div');
+            const classNode = entry.classNode;
+            const classLabel = listClassLabel(classNode);
+            const tooltip = titleFor(classNode);
+            separator.className = 'list-separator' + (index === 0 ? ' first' : '');
+            separator.setAttribute('role', 'separator');
+            separator.setAttribute('aria-label', 'Tests in ' + classLabel);
+            separator.style.top = (index * ROW_HEIGHT) + 'px';
+            separator.addEventListener('mouseenter', () => scheduleNodeTooltip(
+                'list-class-' + classNode.id,
+                tooltip,
+                separator,
+            ));
+            separator.addEventListener('mouseleave', () => hideNodeTooltip('list-class-' + classNode.id));
+            separator.append(
+                iconSpan('codicon-class'),
+                textSpan(classLabel, 'list-separator-label'),
+            );
+            const rightMeta = document.createElement('div');
+            rightMeta.className = 'right-meta';
+            appendRightMeta(rightMeta, classNode, true);
+            separator.appendChild(rightMeta);
+            const actions = document.createElement('div');
+            actions.className = 'actions';
+            const runButton = rowAction(
+                'codicon-run',
+                'Run Class',
+                () => post('runNode', { id: classNode.id }),
+            );
+            const copyButton = rowAction('codicon-copy', 'Copy...', event => {
+                showCopyMenu(classNode, event.clientX, event.clientY);
+            });
+            actions.append(runButton, copyButton);
+            separator.appendChild(actions);
+            return separator;
+        }
+
+        function renderProjectSeparator(projectNode, index) {
+            const separator = document.createElement('div');
+            const label = projectFolderLabel(projectNode);
+            const tooltip = projectTitleFor(projectNode, label);
+            const expanded = isExpanded(projectNode.id);
+            separator.className = 'list-separator project' + (index === 0 ? ' first' : '');
+            separator.setAttribute('role', 'button');
+            separator.setAttribute('aria-label', (expanded ? 'Collapse project ' : 'Expand project ') + label);
+            separator.setAttribute('aria-expanded', String(expanded));
+            separator.tabIndex = 0;
+            separator.style.top = (index * ROW_HEIGHT) + 'px';
+            separator.addEventListener('mouseenter', () => scheduleNodeTooltip(
+                'list-project-' + projectNode.id,
+                tooltip,
+                separator,
+            ));
+            separator.addEventListener('mouseleave', () => hideNodeTooltip('list-project-' + projectNode.id));
+            separator.addEventListener('focus', () => scheduleNodeTooltip(
+                'list-project-' + projectNode.id,
+                tooltip,
+                separator,
+            ));
+            separator.addEventListener('blur', () => hideNodeTooltip('list-project-' + projectNode.id));
+            const toggleProject = () => post('setExpanded', { id: projectNode.id, expanded: !expanded });
+            const twisty = document.createElement('button');
+            twisty.className = 'twisty codicon ' + (expanded ? 'codicon-chevron-down' : 'codicon-chevron-right');
+            twisty.type = 'button';
+            twisty.tabIndex = -1;
+            twisty.setAttribute('aria-label', expanded ? 'Collapse Project' : 'Expand Project');
+            twisty.addEventListener('click', event => {
+                event.stopPropagation();
+                toggleProject();
+            });
+            separator.append(
+                twisty,
+                iconSpan('codicon-root-folder'),
+                textSpan(label, 'list-separator-label'),
+            );
+            const rightMeta = document.createElement('div');
+            rightMeta.className = 'right-meta';
+            appendRightMeta(rightMeta, projectNode, true);
+            separator.appendChild(rightMeta);
+            const actions = document.createElement('div');
+            actions.className = 'actions';
+            actions.appendChild(rowAction(
+                'codicon-run',
+                'Run Project Tests',
+                () => post('runNode', { id: projectNode.id }),
+            ));
+            separator.appendChild(actions);
+            separator.addEventListener('click', toggleProject);
+            separator.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    toggleProject();
+                }
+            });
+            return separator;
+        }
+
+        function projectFolderLabel(node) {
+            const normalizedPath = String(node.moduleDir || '')
+                .split(String.fromCharCode(92))
+                .join('/');
+            const pathParts = normalizedPath.split('/').filter(Boolean);
+            return pathParts[pathParts.length - 1] || node.label;
+        }
+
+        function projectTitleFor(node, label) {
+            const stats = statsForTooltip(node);
+            const duration = totalDurationForNode(node);
+            return [
+                label,
+                'Path: ' + node.moduleDir,
+                'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
+                'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
+            ].join(TOOLTIP_LINE_BREAK);
+        }
+
+        function listClassLabel(node) {
+            return String(node.fqcn || node.className || node.label)
+                .replace(/\$/g, '.')
+                .replace(/[.\\s]+$/g, '');
+        }
+
+        function listNodeLabel(node) {
+            return node.label;
+        }
+
+        function shortListClassLabel(node) {
+            return String(node.className || node.label).split('$').join('.');
         }
 
         function flattenNode(node, depth, output, ancestorIds) {
@@ -1229,14 +1515,17 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function renderNode(entry, index) {
             const node = entry.node;
             const depth = entry.depth;
-            const expanded = isExpanded(node.id);
-            const hasChildren = Boolean(node.children && node.children.length > 0);
+            const listMode = Boolean(entry.listMode);
+            const expanded = !listMode && isExpanded(node.id);
+            const hasChildren = !listMode && Boolean(node.children && node.children.length > 0);
             const selected = selectedNodeIds.has(node.id);
             const row = document.createElement('div');
             row.id = rowDomId(node.id);
             row.className = 'row' + (selected ? ' selected focused' : '');
-            row.setAttribute('role', 'treeitem');
-            row.setAttribute('aria-level', String(depth + 1));
+            row.setAttribute('role', listMode ? 'option' : 'treeitem');
+            if (!listMode) {
+                row.setAttribute('aria-level', String(depth + 1));
+            }
             row.setAttribute('aria-posinset', String(index + 1));
             row.setAttribute('aria-setsize', String(flatRows.length));
             row.setAttribute('aria-selected', selected ? 'true' : 'false');
@@ -1293,7 +1582,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             if (kindIcon) {
                 label.appendChild(iconSpan(kindIcon));
             }
-            label.appendChild(textSpan(node.label, 'label-text'));
+            label.appendChild(textSpan(listMode ? listNodeLabel(node) : node.label, 'label-text'));
+            if (listMode && state.sortMode !== 'location' && entry.classNode) {
+                label.appendChild(textSpan(shortListClassLabel(entry.classNode), 'class-context'));
+            }
             appendMetadata(label, node, hasChildren);
 
             const rightMeta = document.createElement('div');
@@ -1483,24 +1775,25 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 return;
             }
             const selectedIndex = selectedRowIndex();
-            const index = selectedIndex >= 0 ? selectedIndex : 0;
+            const index = selectedIndex >= 0 ? selectedIndex : nextSelectableIndex(-1, 1);
             const entry = flatRows[index];
-            if (!entry) {
+            if (!entry?.node) {
                 return;
             }
             const node = entry.node;
-            const hasChildren = Boolean(node.children && node.children.length > 0);
+            const listMode = state.viewMode === 'list';
+            const hasChildren = !listMode && Boolean(node.children && node.children.length > 0);
             if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                selectVisibleIndex(Math.min(index + 1, flatRows.length - 1));
+                selectVisibleIndex(nextSelectableIndex(index, 1));
             } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
-                selectVisibleIndex(Math.max(index - 1, 0));
+                selectVisibleIndex(nextSelectableIndex(index, -1));
             } else if (event.key === 'ArrowLeft') {
                 event.preventDefault();
                 if (hasChildren && isExpanded(node.id)) {
                     post('setExpanded', { id: node.id, expanded: false });
-                } else if (node.parentId) {
+                } else if (!listMode && node.parentId) {
                     selectNode(node.parentId);
                 }
             } else if (event.key === 'ArrowRight') {
@@ -1526,20 +1819,29 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function selectVisibleIndex(index) {
             const entry = flatRows[index];
-            if (entry) {
+            if (entry?.node) {
                 selectNode(entry.node.id);
                 scrollRowIntoView(index);
             }
         }
 
+        function nextSelectableIndex(index, direction) {
+            let candidate = index + direction;
+            while (candidate >= 0 && candidate < flatRows.length) {
+                if (flatRows[candidate].node) return candidate;
+                candidate += direction;
+            }
+            return index >= 0 && flatRows[index]?.node ? index : -1;
+        }
+
         function selectedRowIndex() {
-            return flatRows.findIndex(entry => entry.node.id === state.selectedId);
+            return flatRows.findIndex(entry => entry.node?.id === state.selectedId);
         }
 
         function focusSelectedOrFirst() {
             treeEl.focus();
             if (selectedRowIndex() < 0 && flatRows.length) {
-                selectVisibleIndex(0);
+                selectVisibleIndex(nextSelectableIndex(-1, 1));
             }
         }
 
@@ -1562,12 +1864,15 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
                 selectionAnchorId = id;
             } else if (mode === 'range' && selectionAnchorId) {
-                const anchorIndex = flatRows.findIndex(entry => entry.node.id === selectionAnchorId);
-                const targetIndex = flatRows.findIndex(entry => entry.node.id === id);
+                const anchorIndex = flatRows.findIndex(entry => entry.node?.id === selectionAnchorId);
+                const targetIndex = flatRows.findIndex(entry => entry.node?.id === id);
                 if (anchorIndex >= 0 && targetIndex >= 0) {
                     const start = Math.min(anchorIndex, targetIndex);
                     const end = Math.max(anchorIndex, targetIndex);
-                    selectedNodeIds = new Set(flatRows.slice(start, end + 1).map(entry => entry.node.id));
+                    selectedNodeIds = new Set(flatRows
+                        .slice(start, end + 1)
+                        .filter(entry => entry.node)
+                        .map(entry => entry.node.id));
                 }
             } else {
                 selectedNodeIds = new Set([id]);
@@ -1586,7 +1891,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function updateSelectedRows() {
             activeGuideParentId = findParentId(state.roots || [], state.selectedId);
             for (const row of rowsEl.querySelectorAll('.row')) {
-                const entry = flatRows.find(candidate => row.id === rowDomId(candidate.node.id));
+                const entry = flatRows.find(candidate => (
+                    candidate.node && row.id === rowDomId(candidate.node.id)
+                ));
                 const selected = Boolean(entry && selectedNodeIds.has(entry.node.id));
                 row.classList.toggle('selected', selected);
                 row.classList.toggle('focused', Boolean(entry && entry.node.id === state.selectedId));
@@ -1598,6 +1905,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function updateIndentGuides() {
             flatRows.forEach((entry) => {
+                if (!entry.node) {
+                    return;
+                }
                 const row = document.getElementById(rowDomId(entry.node.id));
                 if (!row) {
                     return;
@@ -1609,7 +1919,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function updateActiveDescendant() {
-            if (state.selectedId) {
+            if (state.selectedId && selectedRowIndex() >= 0) {
                 treeEl.setAttribute('aria-activedescendant', rowDomId(state.selectedId));
             } else {
                 treeEl.removeAttribute('aria-activedescendant');

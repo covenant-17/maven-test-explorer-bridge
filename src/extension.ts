@@ -46,6 +46,8 @@ import {
     CMD_SORT_BY_STATUS,
     CMD_SORT_BY_STATUS_ASC,
     CMD_SORT_BY_STATUS_DESC,
+    CMD_SHOW_LIST_VIEW,
+    CMD_SHOW_TREE_VIEW,
     CONTROLLER_LABEL,
     EXTENSION_ID,
     OUTPUT_CHANNEL_NAME,
@@ -77,6 +79,7 @@ let currentTree: CustomTreeSnapshot = emptyTree();
 let activeFilterExpression = '';
 let activeSortMode: CustomSortMode = 'location';
 let activeSortDirection: CustomSortDirection = 'asc';
+let activeViewMode: 'tree' | 'list' = 'tree';
 let selectedNodeId: string | undefined;
 let running = false;
 let runtimeRunningNodeIds = new Set<string>();
@@ -91,6 +94,7 @@ const SELECTED_ID_KEY = 'mavenTestExplorer.customSelectedId';
 const FILTER_KEY = 'mavenTestExplorer.customFilter';
 const SORT_MODE_KEY = 'mavenTestExplorer.customSortMode';
 const SORT_DIRECTION_KEY = 'mavenTestExplorer.customSortDirection';
+const VIEW_MODE_KEY = 'mavenTestExplorer.customViewMode';
 
 let provider: CustomTestWebviewProvider;
 let inlineController: vscode.TestController;
@@ -115,6 +119,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeFilterExpression = context.workspaceState.get<string>(FILTER_KEY, '');
     activeSortMode = context.workspaceState.get<CustomSortMode>(SORT_MODE_KEY, 'location');
     activeSortDirection = context.workspaceState.get<CustomSortDirection>(SORT_DIRECTION_KEY, 'asc');
+    activeViewMode = context.workspaceState.get<'tree' | 'list'>(VIEW_MODE_KEY, 'tree');
     selectedNodeId = context.workspaceState.get<string>(SELECTED_ID_KEY);
     for (const id of context.workspaceState.get<string[]>(EXPANDED_IDS_KEY, [])) {
         expandedIds.add(id);
@@ -199,11 +204,16 @@ function rebuildTree(): void {
         expandedIds: Array.from(expandedIds),
         selectedId: selectedNodeId,
         running,
+        viewMode: activeViewMode,
+        sortMode: activeSortMode,
+        sortDirection: activeSortDirection,
     });
     void vscode.commands.executeCommand(
         'setContext',
         'mavenTestExplorer.hasExpandedItems',
-        hasVisibleExpandedItems(currentTree.filteredRoots),
+        activeViewMode === 'list'
+            ? currentTree.filteredRoots.some((root) => expandedIds.has(root.id))
+            : hasVisibleExpandedItems(currentTree.filteredRoots),
     );
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.sortMode', activeSortMode);
     void vscode.commands.executeCommand(
@@ -211,6 +221,7 @@ function rebuildTree(): void {
         'mavenTestExplorer.sortState',
         `${activeSortMode}${activeSortDirection === 'asc' ? 'Asc' : 'Desc'}`,
     );
+    void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.viewMode', activeViewMode);
     syncInlineResults();
 }
 
@@ -696,6 +707,8 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_SORT_BY_DURATION, () => setSortMode(context, 'duration')),
         vscode.commands.registerCommand(CMD_SORT_BY_DURATION_ASC, () => setSortMode(context, 'duration')),
         vscode.commands.registerCommand(CMD_SORT_BY_DURATION_DESC, () => setSortMode(context, 'duration')),
+        vscode.commands.registerCommand(CMD_SHOW_TREE_VIEW, () => setViewMode(context, 'tree')),
+        vscode.commands.registerCommand(CMD_SHOW_LIST_VIEW, () => setViewMode(context, 'list')),
         vscode.commands.registerCommand(CMD_RERUN_FAILED, () => rerunFailed(context)),
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, async () => {
             for (const module of currentModules) {
@@ -801,6 +814,18 @@ async function setExpanded(context: vscode.ExtensionContext, id: string, expande
 }
 
 async function setAllExpanded(context: vscode.ExtensionContext, expanded: boolean): Promise<void> {
+    if (activeViewMode === 'list') {
+        for (const root of currentTree.filteredRoots) {
+            if (expanded) {
+                expandedIds.add(root.id);
+            } else {
+                expandedIds.delete(root.id);
+            }
+        }
+        await context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds));
+        rebuildTree();
+        return;
+    }
     if (expanded) {
         const visitNode = (node: CustomTestNode): void => {
             if (node.children.length > 0) {
@@ -825,12 +850,21 @@ async function setSortMode(context: vscode.ExtensionContext, sortMode: CustomSor
         activeSortDirection = activeSortDirection === 'asc' ? 'desc' : 'asc';
     } else {
         activeSortMode = sortMode;
-        activeSortDirection = 'asc';
+        activeSortDirection = sortMode === 'status' || sortMode === 'duration' ? 'desc' : 'asc';
     }
     await Promise.all([
         context.workspaceState.update(SORT_MODE_KEY, activeSortMode),
         context.workspaceState.update(SORT_DIRECTION_KEY, activeSortDirection),
     ]);
+    rebuildTree();
+}
+
+async function setViewMode(
+    context: vscode.ExtensionContext,
+    viewMode: 'tree' | 'list',
+): Promise<void> {
+    activeViewMode = viewMode;
+    await context.workspaceState.update(VIEW_MODE_KEY, viewMode);
     rebuildTree();
 }
 
