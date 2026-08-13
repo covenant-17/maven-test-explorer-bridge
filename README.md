@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-0.2.12-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.13-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -25,6 +25,7 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 ## Features
 
 - **Auto-discovery** — finds all Maven modules and JUnit 5 test classes in the workspace
+- **Dedicated test tree** — provides a Maven Test Explorer view in the Testing sidebar with deterministic ordering and native run progress
 - **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
 - **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes)
 - **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported
@@ -33,6 +34,8 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
 - **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
+- **Flexible sorting** — sort the tree by source location, test status, or duration, and expand or collapse it from the view toolbar
+- **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
 - **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
@@ -62,8 +65,11 @@ This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, pars
 | Button | Action |
 |--------|--------|
 | ↺ | Reload — rescans Java sources and rebuilds the tree |
+| ▶ | Run All — runs every discovered test through Maven |
+| ⇔ | Expand / Collapse All — opens or closes the whole test hierarchy |
 | 🗑 | Clear Results — removes all pass/fail colours |
 | 🕐 | Run History — pick a past run to restore its results |
+| ≡ / ✓ / ◷ | Sort — order tests by location, status, or duration |
 
 ---
 

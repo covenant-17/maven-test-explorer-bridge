@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.13] - 2026-08-13
+
+### Added
+
+- **Dedicated Maven test tree** - added a custom Testing sidebar view with run actions, expand/collapse controls, and sorting by location, status, or duration.
+- **Richer filtering** - added project-scoped tag suggestions with match counts, comma-separated filters, status aliases, quoted values, and string-valued annotation filters.
+
+### Improved
+
+- **Stable runtime updates** - test discovery and tree ordering are deterministic, while running indicators and report-driven results update without disrupting the current tree state.
+- **Test navigation and actions** - improved multi-selection, context actions, source navigation, virtual invocation handling, and Maven target generation across the custom tree.
+
 ## [0.2.12] - 2026-07-08
 
 ### Added
