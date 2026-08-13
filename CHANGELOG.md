@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.1] - 2026-08-13
+
+### Added
+
+- **JUnit test interfaces** - inherited default test methods now appear under their concrete implementation class, with source context and separate navigation actions for the declaration and implementation class.
+- **Dynamic invocation results** - repeated Surefire cases with the same method name are represented as individual generated invocations instead of overwriting one another.
+
+### Improved
+
+- **Large test suites** - virtualized tree and list rendering keeps expansion, scrolling, selection, and source navigation responsive in projects with thousands of tests.
+- **Runtime feedback** - package and project loaders now disappear as soon as their final running descendant reports a result.
+
+### Fixed
+
+- Fixed aggregate counts for synthetic lifecycle results and unresolved tests during active Maven runs.
+- Fixed result-to-module matching in multi-module workspaces by preferring the report file location.
+
+---
+
 ## [1.0.0] - 2026-08-13
 
 ### Changed

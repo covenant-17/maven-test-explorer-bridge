@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -25,21 +25,23 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 ## Features
 
 - **Auto-discovery** — finds all Maven modules and JUnit 5 test classes in the workspace
-- **Dedicated test tree** — provides a Maven Test Explorer view in the Testing sidebar with deterministic ordering and native run progress
+- **Dedicated test tree and list** — switch between hierarchical and flat views with deterministic ordering, project grouping, and native run progress
+- **Responsive large suites** — virtualized rendering keeps projects with thousands of tests fast to expand, scroll, select, and navigate
 - **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
-- **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes)
+- **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes), dynamic invocations, and inherited test-interface methods
 - **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported
 - **Aggregate stats** — each tree node shows `| ✓N | ✗N | = N | T` counts at a glance
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
 - **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
-- **Flexible sorting** — sort the tree by source location, test status, or duration, and expand or collapse it from the view toolbar
+- **Flexible sorting** — sort by source location, status, duration, or name with independent ascending and descending directions
 - **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
 - **Copy...** — right-click any test item to copy: Maven command, package name, class name (FQCN), full file path, or method name; works with multi-selection
 - **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
 - **JUnit `@Tag` filtering** — class and method tags are available from the custom filter input with project-scoped names such as `@javatest.smoke`; suggestions include contextual match counts, and method-level filters include inherited class tags
+- **Inherited-test navigation** — inherited interface methods show their origin and provide separate context-menu actions to open the test declaration or concrete implementation class
 
 ---
 
