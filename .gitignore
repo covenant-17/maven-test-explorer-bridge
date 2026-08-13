@@ -16,9 +16,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# VS Code extension packaging config
-.vscodeignore
-
 # Project planning docs
 plan/
 

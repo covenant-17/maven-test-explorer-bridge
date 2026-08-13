@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { TestTreeBuilder } from './testTreeBuilder';
-import { SuiteResult, TestCaseResult, TestCaseStatus } from './surefireParser';
+import { InlineTestBridge } from './inlineTestBridge';
+import { SuiteResult, TestCaseResult } from './surefireParser';
 
 // Pattern to detect JUnit "expected:<X> but was:<Y>" assertion failures
 const ASSERTION_DIFF_PATTERN = /expected:\s*<(.+?)>\s+but was:\s*<(.+?)>/i;
@@ -12,7 +12,7 @@ const STACK_FRAME_PATTERN = /at\s+([\w.$]+)\.([\w$<>]+)\((\S+\.java):(\d+)\)/g;
  * Publishes a set of SuiteResult objects to the VS Code Testing API.
  *
  * @param controller  The TestController that owns the test run.
- * @param treeBuilder Used to look up TestItems by class/method name.
+ * @param inlineBridge Used to look up TestItems by class/method name.
  * @param suiteResults Parsed Surefire XML results.
  * @param outputChannel Output channel for logging summary.
  * @param runRequest   If provided (UI-triggered run), the results are persisted.
@@ -20,7 +20,7 @@ const STACK_FRAME_PATTERN = /at\s+([\w.$]+)\.([\w$<>]+)\((\S+\.java):(\d+)\)/g;
  */
 export function publishResults(
     controller: vscode.TestController | undefined,
-    treeBuilder: TestTreeBuilder,
+    inlineBridge: InlineTestBridge,
     suiteResults: readonly SuiteResult[],
     outputChannel: vscode.OutputChannel,
     runRequest?: vscode.TestRunRequest,
@@ -52,7 +52,7 @@ export function publishResults(
         const invocationCounts = sharedInvocationCounts ?? new Map<string, number>();
         for (const suite of suiteResults) {
             for (const tc of suite.testCases) {
-                const item = reportTestCase(run, treeBuilder, tc, outputChannel, invocationCounts);
+                const item = reportTestCase(run, inlineBridge, tc, outputChannel, invocationCounts);
                 if (item) { resolvedItemIds.add(item.id); }
                 if (tc.synthetic) { continue; }
                 switch (tc.status) {
@@ -75,12 +75,6 @@ export function publishResults(
         `${totalPassed} passed, ${totalFailed} failed, ${totalError} errors, ${totalSkipped} skipped`,
     );
 
-    // Skip aggregates when publishing a partial real-time batch (caller will
-    // invoke updateAggregates once at the end with the full result set).
-    if (!existingRun) {
-        treeBuilder.updateAggregates(suiteResults);
-    }
-
     return resolvedItemIds;
 }
 
@@ -90,7 +84,7 @@ export function publishResults(
 
 function reportTestCase(
     run: vscode.TestRun,
-    treeBuilder: TestTreeBuilder,
+    inlineBridge: InlineTestBridge,
     tc: TestCaseResult,
     outputChannel: vscode.OutputChannel,
     invocationCounts: Map<string, number>,
@@ -114,12 +108,12 @@ function reportTestCase(
     //  3. Class item — fallback for class-level/setup errors (e.g. @BeforeAll throwing).
     //     These have a synthetic name: empty, FQCN-like (contains `.`), or
     //     "initializationError". Reporting on the class avoids phantom method items.
-    const staticItem = treeBuilder.findMethodItem(tc.className, effectiveName);
+    const staticItem = inlineBridge.findMethodItem(tc.className, effectiveName);
     let item: vscode.TestItem | undefined;
     if (staticItem) {
         item = staticItem;
     } else {
-        const classIsKnown = treeBuilder.findClassItem(tc.className) !== undefined;
+        const classIsKnown = inlineBridge.findClassItem(tc.className) !== undefined;
         const looksLikeRealMethod = effectiveName.length > 0
             && !effectiveName.includes('.')         // FQCN → class-level error
             && effectiveName !== 'initializationError';
@@ -127,10 +121,10 @@ function reportTestCase(
         if (classIsKnown && !looksLikeRealMethod) {
             // Class-level / setup failure: report on the class item to avoid
             // creating a phantom method entry in the sidebar.
-            item = treeBuilder.findClassItem(tc.className);
+            item = inlineBridge.findClassItem(tc.className);
         } else {
             // Unknown class (concrete subclass) or parameterized/inherited method.
-            item = treeBuilder.getOrCreateMethodItem(tc.className, effectiveName);
+            item = inlineBridge.getOrCreateMethodItem(tc.className, effectiveName);
         }
     }
 

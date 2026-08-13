@@ -44,7 +44,6 @@ export function runMaven(
 
         let runningPassed = 0;
         let runningFailed = 0;
-        let runningErrors = 0;
         let runningSkipped = 0;
         let stdoutBuf = '';
 
@@ -129,17 +128,6 @@ export function buildRunClassArgs(settings: ExtensionSettings, className: string
 }
 
 /**
- * Builds Maven CLI arguments for running a specific test method.
- */
-export function buildRunMethodArgs(
-    settings: ExtensionSettings,
-    className: string,
-    methodName: string,
-): string[] {
-    return applyTemplate(settings.testMethodCommandTemplate, settings, { className, methodName });
-}
-
-/**
  * Builds Maven CLI arguments for re-running a set of failed test classes.
  */
 export function buildRerunFailedArgs(settings: ExtensionSettings, classNames: readonly string[]): string[] {
@@ -154,9 +142,14 @@ export function buildRerunFailedArgs(settings: ExtensionSettings, classNames: re
  * Deletes only TEST-*.xml files from surefire-reports and failsafe-reports directories.
  * Avoids deleting JVM binary files (*.bin) that may still be locked by a running Java process.
  */
-export function clearReportDirectories(moduleDir: string): void {
-    for (const reportDir of [SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR]) {
-        const fullPath = path.join(moduleDir, reportDir);
+export function clearReportDirectories(
+    moduleDir: string,
+    reportGlobs: readonly string[] = [
+        `**/${SUREFIRE_REPORTS_DIR}/TEST-*.xml`,
+        `**/${FAILSAFE_REPORTS_DIR}/TEST-*.xml`,
+    ],
+): void {
+    for (const fullPath of reportDirectories(moduleDir, reportGlobs)) {
         if (!fs.existsSync(fullPath)) {
             continue;
         }
@@ -171,6 +164,17 @@ export function clearReportDirectories(moduleDir: string): void {
             }
         }
     }
+}
+
+function reportDirectories(moduleDir: string, reportGlobs: readonly string[]): Set<string> {
+    const directories = new Set<string>();
+    for (const glob of reportGlobs) {
+        const normalized = glob.replace(/\\/g, '/').replace(/^\*+\//, '');
+        const separator = normalized.lastIndexOf('/');
+        const relativeDir = separator >= 0 ? normalized.slice(0, separator) : '';
+        directories.add(path.join(moduleDir, relativeDir));
+    }
+    return directories;
 }
 
 /**

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Improved
+
+- Added compact Tree/List row-part visibility selectors with expandable metadata options, plus predictable narrow-sidebar truncation priorities for metadata, duration, names, and statistics.
+- Synchronized custom test/report globs with live watchers and report cleanup, applied watcher changes without reload, trimmed history immediately when its limit changes, and clarified every setting description around the problem it solves.
+
+### Removed
+
+- Removed obsolete native-tree statistics settings, inactive multi-module and method-template settings, legacy copy/AI command aliases, and old Test Explorer DOM snapshots.
+
+### Internal
+
+- Reduced the native Testing API integration to a minimal inline bridge for editor gutter actions, loaders, result messages, and error peek.
+- Removed dead watcher/filter code and tightened TypeScript unused-code checks and VSIX packaging.
+
+---
+
 ## [1.0.2] - 2026-08-13
 
 ### Improved

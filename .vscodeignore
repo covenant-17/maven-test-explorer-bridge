@@ -1,0 +1,13 @@
+.vscode
+node_modules
+src/
+out/
+tsconfig.json
+esbuild.js
+**/*.map
+plan/
+.gitignore
+CODEX.MD
+*.code-workspace
+scripts/
+test/

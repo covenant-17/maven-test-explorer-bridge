@@ -67,12 +67,13 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 
 | Button | Action |
 |--------|--------|
-| ↺ | Reload — rescans Java sources and rebuilds the tree |
 | ▶ | Run All — runs every discovered test through Maven |
-| ⇔ | Expand / Collapse All — opens or closes the whole test hierarchy |
-| 🗑 | Clear Results — removes all pass/fail colours |
+| ↺ | Refresh — rescans Java sources and rebuilds the tree |
 | 🕐 | Run History — pick a past run to restore its results |
-| ≡ / ✓ / ◷ | Sort — order tests by location, status, or duration |
+| ⇔ | Expand / Collapse All — opens or closes the visible hierarchy |
+| 🗑 | Clear — clear results, or clear results and history |
+| ≡ | Sort — order tests by location, status, duration, or name |
+| ☷ | View Mode — switch between tree and flat list views |
 
 ---
 
@@ -86,7 +87,6 @@ All commands are available via **Command Palette** (`Ctrl+Shift+P`):
 | `Maven: Run All Tests` | Run `mvn clean test` for all modules |
 | `Maven: Re-run Failed Tests` | Rerun only failed classes from the last run |
 | `Maven: Clean Test Reports` | Delete `target/surefire-reports` and `target/failsafe-reports` |
-| `Maven: Copy Maven Command for Test` | Copy the last Maven command to clipboard |
 | `Maven: Clear Test Results` | Reset all result icons to neutral |
 | `Maven: Show Run History` | Browse and restore past runs |
 
@@ -125,6 +125,13 @@ All commands are available via **Command Palette** (`Ctrl+Shift+P`):
 }
 ```
 
+Use the links in the extension's dedicated `Row Layout` settings group or run `Maven Test Explorer: Configure Tree Visible Parts...` and `Maven Test Explorer: Configure List Visible Parts...` to select row parts in compact multi-select menus. The choices are shared across workspaces and persist between VS Code sessions.
+
+The expander is always visible because collapsing and expanding nodes is part of the explorer's navigation behavior; all other row parts are optional.
+Metadata can be expanded inside the picker and configured separately for original Java names hidden by `@DisplayName`, tags, inherited sources, flat-list class context, and virtual-test hints.
+
+When horizontal space is limited, row metadata is truncated first, followed by duration and then the test name. Expanders, status and kind icons, and aggregate statistics are preserved longest.
+
 ---
 
 ## How It Works
@@ -157,11 +164,10 @@ src/
 ├── settings.ts            # Typed settings wrapper
 ├── mavenProjectDetector.ts # Finds pom.xml, extracts artifactId
 ├── javaTestScanner.ts     # Scans Java sources, detects @Test / @Nested
-├── testTreeBuilder.ts     # Builds VS Code TestItem hierarchy
+├── inlineTestBridge.ts    # Minimal Testing API bridge for editor gutter and results
 ├── surefireParser.ts      # Parses TEST-*.xml via fast-xml-parser
 ├── resultPublisher.ts     # Maps Surefire results onto discovered tests
 ├── mavenRunner.ts         # Spawns Maven process
-├── reportWatcher.ts       # FileSystemWatcher + debounce
 ├── runHistory.ts          # Workspace-scoped run history
 └── extension.ts           # Entry point, command registration
 ```

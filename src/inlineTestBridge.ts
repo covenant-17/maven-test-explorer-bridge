@@ -2,14 +2,11 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { MavenModule } from './mavenProjectDetector';
 import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
-import { SuiteResult } from './surefireParser';
-import { readSettings } from './settings';
-
-const RESULT_STATUS_NAMES = ['passed', 'failed', 'error', 'skipped'] as const;
-const RESULT_STATUS_TAGS = new Set(RESULT_STATUS_NAMES.map(statusTagId));
 
 /**
- * Builds and maintains the VS Code TestItem hierarchy.
+ * Maintains the minimal VS Code TestItem hierarchy required for editor gutter
+ * actions, running indicators, result messages, and error peek. The dedicated
+ * custom webview remains the extension's user-facing test explorer.
  *
  * Tree shape:
  *   Module → Package → OuterClass → [@Nested InnerClass →]* Method
@@ -24,7 +21,7 @@ const RESULT_STATUS_TAGS = new Set(RESULT_STATUS_NAMES.map(statusTagId));
  *   Class:         {artifactId}/{packageName}/{ClassName}          (may include $)
  *   Method:        {artifactId}/{packageName}/{ClassName}#{method}
  */
-export class TestTreeBuilder {
+export class InlineTestBridge {
     private readonly controller: vscode.TestController;
 
     // FQCN (com.example.AppTest$Nested) → TestItem — used by resultPublisher
@@ -33,9 +30,6 @@ export class TestTreeBuilder {
     private readonly methodItems = new Map<string, vscode.TestItem>();
     // "moduleId/packageName" → TestItem
     private readonly packageItems = new Map<string, vscode.TestItem>();
-    // "moduleId" → TestItem
-    private readonly moduleItems = new Map<string, vscode.TestItem>();
-
     constructor(controller: vscode.TestController) {
         this.controller = controller;
     }
@@ -44,7 +38,6 @@ export class TestTreeBuilder {
         this.classItems.clear();
         this.methodItems.clear();
         this.packageItems.clear();
-        this.moduleItems.clear();
 
         const moduleItems: vscode.TestItem[] = [];
         for (const { module, classes } of modulesWithClasses) {
@@ -59,42 +52,6 @@ export class TestTreeBuilder {
 
     findMethodItem(fqcn: string, methodName: string): vscode.TestItem | undefined {
         return this.methodItems.get(`${fqcn}#${methodName}`);
-    }
-
-    getModuleItems(): vscode.TestItem[] {
-        const items: vscode.TestItem[] = [];
-        this.controller.items.forEach((item) => items.push(item));
-        return items;
-    }
-
-    getAllClassItems(): vscode.TestItem[] {
-        return Array.from(this.classItems.values());
-    }
-
-    getAllMethodItems(): vscode.TestItem[] {
-        return Array.from(this.methodItems.values());
-    }
-
-    /** Returns all method-level TestItems belonging to a specific module. */
-    getMethodItemsForModule(artifactId: string): vscode.TestItem[] {
-        const prefix = `${artifactId}/`;
-        return Array.from(this.methodItems.values())
-            .filter((item) => item.id.startsWith(prefix));
-    }
-
-    /** Returns all FQCNs (root classes only) belonging to a package. */
-    getFqcnsForPackage(artifactId: string, packageName: string): string[] {
-        const pkgKey = `${artifactId}/${packageName}`;
-        const pkgItem = this.packageItems.get(pkgKey);
-        if (!pkgItem) { return []; }
-        const fqcns: string[] = [];
-        pkgItem.children.forEach((classItem) => {
-            // Find FQCN by reverse-lookup in classItems
-            for (const [fqcn, item] of this.classItems) {
-                if (item === classItem) { fqcns.push(fqcn); break; }
-            }
-        });
-        return fqcns;
     }
 
     /**
@@ -184,123 +141,8 @@ export class TestTreeBuilder {
         return classItem;
     }
 
-    /**
-     * Resets all test items to a neutral "not yet run" state.
-     * Clears aggregate description labels from all tree nodes.
-     */
-    resetAllResults(): void {
-        // Clear aggregate labels
-        for (const item of this.classItems.values())   { item.description = ''; }
-        for (const item of this.packageItems.values()) { item.description = ''; }
-        for (const item of this.moduleItems.values())  { item.description = ''; }
-    }
-    /**
-     * Computes pass/fail/skip aggregate counts and sets the description string on
-     * every class, package and module item.  Nested class stats are rolled into
-     * their parent class so the outer class always shows the full subtotal.
-     * Package / module totals sum only root (non-nested) classes to avoid
-     * double-counting.
-     */
-    updateAggregates(suiteResults: readonly SuiteResult[]): void {
-        const settings = readSettings();
-
-        // --- Step 1: direct stats per FQCN from suite results ---
-        // Cross-suite dedup: Surefire reports parent-class methods in nested-class
-        // XML files, so the same (className, methodName) can appear in multiple suite
-        // entries. We count all occurrences WITHIN a suite (needed for @TestFactory /
-        // @ParameterizedTest where the same methodName repeats), but skip any
-        // (className, methodName) that was already claimed by a previous suite.
-        const directStats = new Map<string, AggStats>();
-        const claimedByPreviousSuite = new Set<string>();
-        for (const suite of suiteResults) {
-            const claimedByThisSuite = new Set<string>();
-            for (const tc of suite.testCases) {
-                if (tc.synthetic) { continue; }
-                const crossSuiteKey = `${tc.className}#${tc.methodName}`;
-                if (claimedByPreviousSuite.has(crossSuiteKey)) { continue; }
-                claimedByThisSuite.add(crossSuiteKey);
-                let s = directStats.get(tc.className);
-                if (!s) {
-                    s = zeroStats();
-                    directStats.set(tc.className, s);
-                }
-                if      (tc.status === 'passed')  { s.passed++;  }
-                else if (tc.status === 'failed')  { s.failed++;  }
-                else if (tc.status === 'error')   { s.error++;   }
-                else if (tc.status === 'skipped') { s.skipped++; }
-
-                const methodItem = this.methodItems.get(`${tc.className}#${tc.methodName}`);
-                if (methodItem) {
-                    setResultStatusTags(methodItem, statusesFor(tc.status));
-                }
-            }
-            for (const key of claimedByThisSuite) {
-                claimedByPreviousSuite.add(key);
-            }
-        }
-
-        // --- Step 2: copy into classAgg, then roll nested → parent (deepest first) ---
-        const classAgg = new Map<string, AggStats>();
-        for (const fqcn of this.classItems.keys()) {
-            const d = directStats.get(fqcn);
-            classAgg.set(fqcn, d ? { ...d } : zeroStats());
-        }
-
-        const sortedByDepth = Array.from(this.classItems.keys()).sort(
-            (a, b) => b.split('$').length - a.split('$').length,
-        );
-        for (const fqcn of sortedByDepth) {
-            if (!fqcn.includes('$')) { continue; }
-            const parentFqcn = fqcn.substring(0, fqcn.lastIndexOf('$'));
-            const parentStats = classAgg.get(parentFqcn);
-            if (!parentStats) { continue; }
-            addInto(parentStats, classAgg.get(fqcn)!);
-        }
-
-        // --- Step 3: apply description to class items ---
-        for (const [fqcn, classItem] of this.classItems) {
-            setResultStatusTags(classItem, statusesForStats(classAgg.get(fqcn)!));
-        }
-
-        if (!settings.showStats) {
-            return;
-        }
-        const statsFormat = settings.statsFormat;
-
-        // --- Step 3b: apply description to class items ---
-        for (const [fqcn, classItem] of this.classItems) {
-            classItem.description = formatStats(classAgg.get(fqcn)!, statsFormat);
-        }
-
-        // --- Step 4: aggregate package / module (root classes only — no double-counting) ---
-        const pkgAccum = new Map<string, AggStats>();
-        const modAccum = new Map<string, AggStats>();
-
-        for (const [fqcn, classItem] of this.classItems) {
-            if (fqcn.includes('$')) { continue; }
-            const stats = classAgg.get(fqcn)!;
-            const parts = classItem.id.split('/');
-            if (parts.length < 2) { continue; }
-            accumulate(pkgAccum, `${parts[0]}/${parts[1]}`, stats);
-            accumulate(modAccum, parts[0], stats);
-        }
-
-        for (const [pkgKey, stats] of pkgAccum) {
-            const item = this.packageItems.get(pkgKey);
-            if (item) { item.description = formatStats(stats, statsFormat); }
-        }
-        for (const [modKey, stats] of modAccum) {
-            const item = this.moduleItems.get(modKey);
-            if (item) { item.description = formatStats(stats, statsFormat); }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-
     private buildModuleItem(module: MavenModule, classes: readonly TestClassInfo[]): vscode.TestItem {
         const moduleItem = this.controller.createTestItem(module.artifactId, module.artifactId);
-        this.moduleItems.set(module.artifactId, moduleItem);
-
         const byPackage = groupByPackage(classes);
         const packageItems: vscode.TestItem[] = [];
         for (const [packageName, packageClasses] of byPackage) {
@@ -335,9 +177,6 @@ export class TestTreeBuilder {
                 cls.displayName ? `$(symbol-class) ${cls.displayName}` : `$(symbol-class) ${simpleName}`,
                 classUri,
             );
-            classItem.tags = [
-                ...cls.tags.map((t) => new vscode.TestTag(t)),
-            ];
 
             const fqcn = buildFqcn(packageName, cls.className);
             this.classItems.set(fqcn, classItem);
@@ -351,7 +190,7 @@ export class TestTreeBuilder {
             const fqcn = buildFqcn(packageName, cls.className);
 
             const methodItems = cls.methods.map((method) =>
-                this.buildMethodItem(classId, classItem.uri, fqcn, method, cls.tags),
+                this.buildMethodItem(classId, classItem.uri, fqcn, method),
             );
             classItem.children.replace(methodItems);
         }
@@ -391,7 +230,6 @@ export class TestTreeBuilder {
         classUri: vscode.Uri | undefined,
         fqcn: string,
         method: MethodInfo,
-        classTags: readonly string[] = [],
     ): vscode.TestItem {
         const methodId = `${classId}#${method.name}`;
         const methodItem = this.controller.createTestItem(
@@ -399,9 +237,6 @@ export class TestTreeBuilder {
             method.displayName ? `$(symbol-method) ${method.displayName}` : `$(symbol-method) ${method.name}()`,
             method.sourcePath ? vscode.Uri.file(method.sourcePath) : classUri,
         );
-        methodItem.tags = [
-            ...new Set([...classTags, ...method.tags]).values(),
-        ].map((t) => typeof t === 'string' ? new vscode.TestTag(t) : t);
         const zeroBasedLine = Math.max(0, method.line - 1);
         methodItem.range = new vscode.Range(
             new vscode.Position(zeroBasedLine, 0),
@@ -451,74 +286,3 @@ function groupByPackage(classes: readonly TestClassInfo[]): Map<string, TestClas
     return map;
 }
 
-// -------------------------------------------------------------------------
-// Aggregate stats helpers
-// -------------------------------------------------------------------------
-
-interface AggStats {
-    passed: number;
-    failed: number;
-    error: number;
-    skipped: number;
-}
-
-function zeroStats(): AggStats {
-    return { passed: 0, failed: 0, error: 0, skipped: 0 };
-}
-
-function addInto(target: AggStats, source: AggStats): void {
-    target.passed  += source.passed;
-    target.failed  += source.failed;
-    target.error   += source.error;
-    target.skipped += source.skipped;
-}
-
-function accumulate(map: Map<string, AggStats>, key: string, stats: AggStats): void {
-    let existing = map.get(key);
-    if (!existing) {
-        existing = zeroStats();
-        map.set(key, existing);
-    }
-    addInto(existing, stats);
-}
-
-function setResultStatusTags(item: vscode.TestItem, statuses: readonly string[]): void {
-    const existing = item.tags.filter((tag) => !RESULT_STATUS_TAGS.has(tag.id));
-    item.tags = [
-        ...existing,
-        ...statuses.map((status) => new vscode.TestTag(statusTagId(status))),
-    ];
-}
-
-function statusTagId(status: string): string {
-    return `status.${status}`;
-}
-
-function statusesFor(status: SuiteResult['testCases'][number]['status']): string[] {
-    if (status === 'error') {
-        return ['error', 'failed'];
-    }
-    return [status];
-}
-
-function statusesForStats(stats: AggStats): string[] {
-    const statuses: string[] = [];
-    if (stats.passed > 0) { statuses.push('passed'); }
-    if (stats.failed > 0 || stats.error > 0) { statuses.push('failed'); }
-    if (stats.error > 0) { statuses.push('error'); }
-    if (stats.skipped > 0) { statuses.push('skipped'); }
-    return statuses;
-}
-
-function formatStats(stats: AggStats, format: string): string {
-    const failCount = stats.failed + stats.error;
-    const total = stats.passed + failCount + stats.skipped;
-    if (total === 0) { return ''; }
-
-    return format
-        .replace('{passed}',  String(stats.passed))
-        .replace('{failed}',  String(failCount))
-        .replace('{error}',   String(stats.error))
-        .replace('{skipped}', String(stats.skipped))
-        .replace('{total}',   String(total));
-}

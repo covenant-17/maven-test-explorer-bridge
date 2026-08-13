@@ -149,41 +149,6 @@
         "category": "Maven Test Explorer"
       },
       {
-        "command": "mavenTestExplorer.copyMavenCommand",
-        "title": "Maven: Copy Maven Command for Test",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copy",
-        "title": "Copy...",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copyItemMavenCommand",
-        "title": "Copy Maven Command",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copyClassName",
-        "title": "Copy Class Name (FQCN)",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copyMethodName",
-        "title": "Copy Method Name",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copyPackageName",
-        "title": "Copy Package Name",
-        "category": "Maven Test Explorer"
-      },
-      {
-        "command": "mavenTestExplorer.copyFullPath",
-        "title": "Copy Full Path",
-        "category": "Maven Test Explorer"
-      },
-      {
         "command": "mavenTestExplorer.clearResults",
         "title": "Clear Test Results",
         "category": "Maven Test Explorer",
@@ -202,22 +167,20 @@
         "icon": "$(history)"
       },
       {
-        "command": "mavenTestExplorer.attachToCopilot",
-        "title": "Attach to Copilot Chat",
-        "category": "Maven Test Explorer",
-        "icon": "$(copilot)"
-      },
-      {
-        "command": "mavenTestExplorer.attachToClaude",
-        "title": "Attach to Claude",
-        "category": "Maven Test Explorer",
-        "icon": "$(comment-discussion)"
-      },
-      {
         "command": "mavenTestExplorer.revealInCustomExplorer",
         "title": "Reveal in Maven Test Explorer",
         "category": "Maven Test Explorer",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "mavenTestExplorer.configureTreeVisibleParts",
+        "title": "Configure Tree Visible Parts...",
+        "category": "Maven Test Explorer"
+      },
+      {
+        "command": "mavenTestExplorer.configureListVisibleParts",
+        "title": "Configure List Visible Parts...",
+        "category": "Maven Test Explorer"
       }
     ],
     "views": {
@@ -432,40 +395,39 @@
         {
           "command": "mavenTestExplorer.showTreeView",
           "when": "false"
+        },
+        {
+          "command": "mavenTestExplorer.revealInCustomExplorer",
+          "when": "false"
         }
       ]
     },
     "configuration": [
       {
         "title": "Test Discovery",
+        "order": 10,
         "properties": {
           "mavenTestExplorer.mavenExecutable": {
             "type": "string",
             "default": "mvn",
-            "description": "Path to the Maven executable (e.g. 'mvn' or '/usr/local/bin/mvn')."
+            "description": "Maven executable used when no Maven Wrapper is selected or found. Set an absolute path when 'mvn' is not available on PATH."
           },
           "mavenTestExplorer.preferMavenWrapper": {
             "type": "boolean",
             "default": true,
-            "description": "Use mvnw / mvnw.cmd (Maven Wrapper) if found in the module or its parent directory, instead of the global Maven executable."
-          },
-          "mavenTestExplorer.multiModuleMode": {
-            "type": "string",
-            "enum": ["auto", "root", "perModule"],
-            "default": "auto",
-            "description": "How to handle multi-module Maven projects. 'auto' detects automatically."
+            "description": "Prefer the project's mvnw or mvnw.cmd so test runs use the Maven version expected by the project. Falls back to Maven Executable when no wrapper is found."
           },
           "mavenTestExplorer.testSourceGlobs": {
             "type": "array",
             "items": { "type": "string" },
             "default": ["**/src/test/java/**/*.java"],
-            "description": "Glob patterns for Java test source files. Add extra patterns for non-standard source directories (e.g. '**/src/it/java/**/*.java')."
+            "description": "Java source patterns used for both test discovery and automatic file watching. Add a pattern when tests live outside src/test/java, for example '**/src/it/java/**/*.java'."
           },
           "mavenTestExplorer.autoRefreshOnSave": {
             "type": "boolean",
             "default": true,
             "order": 1,
-            "description": "Automatically refresh the test tree when Java test files are created, deleted, or saved."
+            "description": "Refresh the explorer after matching Java test files are created, changed, or deleted, so the tree stays synchronized without a manual Refresh."
           },
           "mavenTestExplorer.autoRefreshDebounceMs": {
             "type": "number",
@@ -473,63 +435,50 @@
             "minimum": 100,
             "maximum": 5000,
             "order": 2,
-            "description": "Delay in milliseconds before the test tree is refreshed after a file change. Increase on large projects or slow machines."
+            "description": "Wait this many milliseconds after the last Java test-file change before rediscovery. Increase it when rapid saves cause repeated expensive scans in large projects."
           }
         }
       },
       {
         "title": "Test Execution",
+        "order": 20,
         "properties": {
           "mavenTestExplorer.defaultCommand": {
             "type": "string",
             "default": "clean test",
-            "description": "Maven goals to run when executing tests (e.g. 'clean test')."
+            "description": "Maven goals used by Run All Tests, for example 'clean test'. Class, method, and grouped runs use Test Class Command Template instead."
           },
           "mavenTestExplorer.defaultProfiles": {
             "type": "array",
             "items": { "type": "string" },
             "default": [],
-            "description": "Maven profiles to activate by default (e.g. [\"dev\", \"ci\"])."
+            "description": "Profiles added to every test command. Use this when tests require project-specific environments such as dev or ci."
           },
           "mavenTestExplorer.additionalArgs": {
             "type": "string",
             "default": "",
-            "description": "Additional arguments appended to every Maven command (e.g. '-Denv=dev01 -Dheadless=false')."
+            "description": "Extra arguments added to every Maven test command, for example environment properties or headless-browser flags."
           },
           "mavenTestExplorer.clearReportsBeforeRun": {
             "type": "boolean",
             "default": true,
-            "description": "Delete existing surefire-reports before running tests to prevent stale results."
+            "description": "Delete existing TEST-*.xml files from the configured report locations before a run, preventing stale XML from appearing as results of the new run."
           },
           "mavenTestExplorer.testClassCommandTemplate": {
             "type": "string",
             "default": "{maven} {profiles} {args} -Dtest={className} test",
-            "description": "Template for running a single test class. Placeholders: {maven}, {profiles}, {args}, {className}."
-          },
-          "mavenTestExplorer.testMethodCommandTemplate": {
-            "type": "string",
-            "default": "{maven} {profiles} {args} -Dtest={className}#{methodName} test",
-            "description": "Template for running a single test method. Placeholders: {maven}, {profiles}, {args}, {className}, {methodName}."
+            "description": "Command template used for class, method, grouped, and failed-test runs. Change it when the project's test selector differs from Surefire -Dtest. Placeholders: {maven}, {profiles}, {args}, {className}."
           }
         }
       },
       {
         "title": "Results & Display",
+        "order": 30,
         "properties": {
           "mavenTestExplorer.showOutputChannel": {
             "type": "boolean",
             "default": true,
-            "description": "Automatically reveal the Maven output panel when a test run starts."
-          },
-          "mavenTestExplorer.showStats": {
-            "type": "boolean",
-            "default": true,
-            "description": "Show pass/fail aggregate counts next to each node in the test tree."
-          },
-          "mavenTestExplorer.statsFormat": {
-            "type": "string",
-            "default": "| ✓{passed} | ✗{failed} | ⭾ {skipped} | ● {total} ",
-            "description": "Format string for aggregate stats shown on test tree nodes. Available placeholders: {passed} — passed count, {failed} — failed + error count, {error} — error count (raw), {skipped} — skipped count, {total} — total count."
+            "description": "Open the Maven output panel when a run starts so command output and failures are immediately visible. Disable it to keep focus in the editor and open the output manually when needed."
           },
           "mavenTestExplorer.reportGlobs": {
             "type": "array",
@@ -538,23 +487,69 @@
               "**/target/surefire-reports/TEST-*.xml",
               "**/target/failsafe-reports/TEST-*.xml"
             ],
-            "description": "Glob patterns for Surefire/Failsafe XML report files."
+            "description": "XML report patterns used for result loading, live watching, and pre-run cleanup. Add custom locations when the project writes reports outside the standard Surefire or Failsafe directories."
           },
           "mavenTestExplorer.watchReports": {
             "type": "boolean",
             "default": true,
-            "description": "Automatically update Test Explorer when report XML files change (external Maven runs)."
+            "description": "Watch the configured report files and update results after Maven runs started outside this extension. Changes take effect immediately; no window reload is required."
+          },
+          "mavenTestExplorer.rowLayout": {
+            "type": "object",
+            "additionalProperties": false,
+            "default": {
+              "tree": ["status", "kindIcon", "name", "metadata", "duration", "stats"],
+              "list": ["status", "kindIcon", "name", "metadata", "duration", "stats"],
+              "treeMetadata": ["description", "tags", "inheritance", "classContext", "virtualHint"],
+              "listMetadata": ["description", "tags", "inheritance", "classContext", "virtualHint"]
+            },
+            "properties": {
+              "tree": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": ["status", "kindIcon", "name", "metadata", "duration", "stats"]
+                }
+              },
+              "list": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": ["status", "kindIcon", "name", "metadata", "duration", "stats"]
+                }
+              },
+              "treeMetadata": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": ["description", "tags", "inheritance", "classContext", "virtualHint"]
+                }
+              },
+              "listMetadata": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": ["description", "tags", "inheritance", "classContext", "virtualHint"]
+                }
+              }
+            },
+            "markdownDescription": "Reduce visual noise or preserve space by choosing which parts are rendered in test rows: [Configure Tree](command:mavenTestExplorer.configureTreeVisibleParts) | [Configure List](command:mavenTestExplorer.configureListVisibleParts). Expand Metadata to configure original Java names, tags, inherited sources, class context, and virtual-test hints separately. Expander is always visible because it is required for navigation. Display order is fixed; array order is ignored."
           }
         }
       },
       {
         "title": "Run History",
+        "order": 40,
         "properties": {
           "mavenTestExplorer.runHistoryEnabled": {
             "type": "boolean",
             "default": true,
             "order": 1,
-            "description": "Save test runs to history for later review via the History button."
+            "description": "Save newly completed runs so their results can be restored from the History button. Disabling this stops new entries but keeps existing history available."
           },
           "mavenTestExplorer.maxHistoryEntries": {
             "type": "number",
@@ -562,7 +557,7 @@
             "minimum": 1,
             "maximum": 100,
             "order": 2,
-            "description": "Maximum number of test run history entries to keep."
+            "description": "Keep only this many newest run-history entries to limit workspace storage. Lowering the value removes older entries immediately."
           }
         }
       }

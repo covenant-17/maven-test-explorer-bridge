@@ -79,3 +79,11 @@ export function loadHistory(context: vscode.ExtensionContext): RunHistoryEntry[]
 export function clearHistory(context: vscode.ExtensionContext): void {
     context.workspaceState.update(HISTORY_STATE_KEY, []);
 }
+
+export function trimHistory(context: vscode.ExtensionContext, maxEntries: number): Thenable<void> {
+    const history = loadHistory(context);
+    if (history.length <= maxEntries) {
+        return Promise.resolve();
+    }
+    return context.workspaceState.update(HISTORY_STATE_KEY, history.slice(0, maxEntries));
+}

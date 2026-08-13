@@ -5,6 +5,7 @@ import {
     CustomSortMode,
     CustomTestNode,
 } from './customTestModel';
+import { TEST_METADATA_PARTS, TEST_ROW_PARTS, TestMetadataPart, TestRowPart } from './rowVisibility';
 
 export const CUSTOM_VIEW_ID = 'mavenTestExplorer.view';
 
@@ -22,6 +23,10 @@ export interface WebviewState {
     viewMode: 'tree' | 'list';
     sortMode: CustomSortMode;
     sortDirection: CustomSortDirection;
+    treeVisibleParts: readonly TestRowPart[];
+    listVisibleParts: readonly TestRowPart[];
+    treeMetadataParts: readonly TestMetadataPart[];
+    listMetadataParts: readonly TestMetadataPart[];
 }
 
 export interface WebviewHandlers {
@@ -39,7 +44,6 @@ export interface WebviewHandlers {
     selectNode(id: string): void | Promise<void>;
     setExpanded(id: string, expanded: boolean): void | Promise<void>;
     copy(kind: string, id?: string): void | Promise<void>;
-    attach(kind: 'copilot' | 'claude', id?: string): void | Promise<void>;
 }
 
 export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
@@ -56,6 +60,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         viewMode: 'tree',
         sortMode: 'location',
         sortDirection: 'asc',
+        treeVisibleParts: [...TEST_ROW_PARTS],
+        listVisibleParts: [...TEST_ROW_PARTS],
+        treeMetadataParts: [...TEST_METADATA_PARTS],
+        listMetadataParts: [...TEST_METADATA_PARTS],
     };
 
     constructor(
@@ -137,11 +145,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             case 'copy':
                 await this.handlers.copy(message.kind ?? 'path', message.id);
                 break;
-            case 'attach':
-                if (message.kind === 'copilot' || message.kind === 'claude') {
-                    await this.handlers.attach(message.kind, message.id);
-                }
-                break;
         }
     }
 
@@ -167,7 +170,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             --row-height: 22px;
             --status-width: 16px;
             --action-zone: 48px;
-            --meta-width: 224px;
             --tree-indent: 8px;
         }
         * {
@@ -465,7 +467,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .rows {
             position: relative;
             width: 100%;
-            min-height: 100%;
         }
         .row {
             position: absolute;
@@ -590,7 +591,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             to { transform: rotate(360deg); }
         }
         .label {
-            flex: 1 1 auto;
+            flex: 0 1 auto;
             min-width: 0;
             display: flex;
             align-items: center;
@@ -609,7 +610,17 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             white-space: nowrap;
         }
         .label-text {
-            flex: 0 1 auto;
+            flex: 1 1 auto;
+        }
+        .inline-metadata {
+            flex: 0 10000 auto;
+            min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            height: var(--row-height);
+            overflow: hidden;
+            white-space: nowrap;
         }
         .description,
         .tags,
@@ -631,13 +642,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             opacity: 0.9;
         }
         .right-meta {
-            flex: 0 0 auto;
+            flex: 0 100 auto;
             width: auto;
-            max-width: min(70%, var(--meta-width));
+            max-width: 70%;
             min-width: 0;
             display: inline-flex;
             align-items: center;
-            justify-content: flex-end;
+            justify-content: flex-start;
+            margin-left: auto;
             gap: 4px;
             padding-right: 4px;
             color: var(--vscode-descriptionForeground);
@@ -650,10 +662,35 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .right-meta > span {
             flex: 0 0 auto;
         }
+        .right-meta > .duration {
+            flex: 1 1000 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: clip;
+        }
+        .duration.atomic-hidden {
+            display: none;
+        }
+        .stats-meta {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 16px;
+            line-height: 16px;
+        }
         .meta-part {
             display: inline-flex;
             align-items: center;
             gap: 1px;
+            height: 16px;
+            line-height: 16px;
+        }
+        .meta-part > span {
+            display: inline-flex;
+            align-items: center;
+            height: 16px;
+            line-height: 16px;
         }
         .meta-part .metric-status-icon {
             width: 12px;
@@ -662,7 +699,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .metric-status-icon,
         .metric-total-icon {
-            display: inline-block;
+            display: block;
+            align-self: center;
+            transform: translateY(0.5px);
             overflow: visible;
         }
         .metric-total-icon {
@@ -693,6 +732,23 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .row.selected .meta-total,
         .row.selected .duration {
             color: inherit;
+        }
+        .tree.hide-expander .twisty,
+        .tree.hide-status .status,
+        .tree.hide-kind-icon .kind-icon,
+        .tree.hide-name .label-text,
+        .tree.hide-name .list-separator-label,
+        .tree.hide-metadata .inline-metadata,
+        .tree.hide-duration .duration,
+        .tree.hide-stats .stats-meta {
+            display: none;
+        }
+        .tree.hide-metadata-description .metadata-description,
+        .tree.hide-metadata-tags .metadata-tags,
+        .tree.hide-metadata-inheritance .metadata-inheritance,
+        .tree.hide-metadata-class-context .metadata-class-context,
+        .tree.hide-metadata-virtual-hint .metadata-virtual-hint {
+            display: none;
         }
         .actions {
             position: absolute;
@@ -821,7 +877,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 display: none;
             }
             :root {
-                --meta-width: 164px;
                 --action-zone: 28px;
             }
         }
@@ -855,7 +910,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const TOOLTIP_LINE_BREAK = String.fromCharCode(10);
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@executed'];
-        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc' };
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
         let filterTimer;
         let filterSuggestionItems = [];
         let filterSuggestionIndex = -1;
@@ -875,6 +930,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let submenuIndex = -1;
         let submenuTrigger = null;
         let rowsRenderFrame;
+        let durationLayoutFrame;
         let renderedRowStart = -1;
         let renderedRowEnd = -1;
 
@@ -963,7 +1019,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             hideNodeTooltip();
             scheduleVisibleRowsRender();
         });
-        window.addEventListener('resize', scheduleVisibleRowsRender);
+        window.addEventListener('resize', () => {
+            scheduleVisibleRowsRender();
+            scheduleAtomicDurationLayout();
+        });
 
         document.addEventListener('click', (event) => {
             if (!copyMenuEl.contains(event.target) && !copySubmenuEl.contains(event.target)) {
@@ -1295,6 +1354,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function renderRows(previousTop) {
             rowsEl.replaceChildren();
             const listMode = state.viewMode === 'list';
+            applyRowPartVisibility(listMode);
             treeEl.setAttribute('role', listMode ? 'listbox' : 'tree');
             treeEl.setAttribute('aria-label', listMode
                 ? 'Maven Test Explorer list'
@@ -1311,10 +1371,31 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            rowsEl.style.height = Math.max(flatRows.length * ROW_HEIGHT, treeEl.clientHeight) + 'px';
-            treeEl.scrollTop = Math.min(previousTop, Math.max(0, rowsEl.offsetHeight - treeEl.clientHeight));
+            const contentHeight = flatRows.length * ROW_HEIGHT;
+            rowsEl.style.height = contentHeight + 'px';
+            treeEl.scrollTop = Math.min(previousTop, Math.max(0, contentHeight - treeEl.clientHeight));
             renderVisibleRows(true);
             updateActiveDescendant();
+        }
+
+        function applyRowPartVisibility(listMode) {
+            const configured = listMode ? state.listVisibleParts : state.treeVisibleParts;
+            const visible = new Set(Array.isArray(configured) ? configured : [
+                'expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats',
+            ]);
+            for (const part of ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats']) {
+                treeEl.classList.toggle('hide-' + part.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()), !visible.has(part));
+            }
+            const configuredMetadata = listMode ? state.listMetadataParts : state.treeMetadataParts;
+            const visibleMetadata = new Set(Array.isArray(configuredMetadata) ? configuredMetadata : [
+                'description', 'tags', 'inheritance', 'classContext', 'virtualHint',
+            ]);
+            for (const part of ['description', 'tags', 'inheritance', 'classContext', 'virtualHint']) {
+                treeEl.classList.toggle(
+                    'hide-metadata-' + part.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()),
+                    !visibleMetadata.has(part),
+                );
+            }
         }
 
         function scheduleVisibleRowsRender() {
@@ -1349,7 +1430,26 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 );
             }
             rowsEl.replaceChildren(fragment);
+            scheduleAtomicDurationLayout();
             updateActiveDescendant();
+        }
+
+        function scheduleAtomicDurationLayout() {
+            if (durationLayoutFrame !== undefined) {
+                return;
+            }
+            durationLayoutFrame = requestAnimationFrame(() => {
+                durationLayoutFrame = undefined;
+                const durations = Array.from(rowsEl.querySelectorAll('.duration'));
+                for (const duration of durations) {
+                    duration.classList.remove('atomic-hidden');
+                }
+                for (const duration of durations) {
+                    if (duration.clientWidth > 0 && duration.scrollWidth - duration.clientWidth > 0.5) {
+                        duration.classList.add('atomic-hidden');
+                    }
+                }
+            });
         }
 
         function flattenRoots(roots) {
@@ -1463,7 +1563,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             ));
             separator.addEventListener('mouseleave', () => hideNodeTooltip('list-class-' + classNode.id));
             separator.append(
-                iconSpan('codicon-class'),
+                iconSpan('codicon-class', 'kind-icon'),
                 textSpan(classLabel, 'list-separator-label'),
             );
             const rightMeta = document.createElement('div');
@@ -1520,7 +1620,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             });
             separator.append(
                 twisty,
-                iconSpan('codicon-root-folder'),
+                iconSpan('codicon-root-folder', 'kind-icon'),
                 textSpan(label, 'list-separator-label'),
             );
             const rightMeta = document.createElement('div');
@@ -1665,13 +1765,18 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             label.className = 'label';
             const kindIcon = kindIconFor(node.kind);
             if (kindIcon) {
-                label.appendChild(iconSpan(kindIcon));
+                label.appendChild(iconSpan(kindIcon, 'kind-icon'));
             }
             label.appendChild(textSpan(listMode ? listNodeLabel(node) : node.label, 'label-text'));
+            const inlineMetadata = document.createElement('div');
+            inlineMetadata.className = 'inline-metadata';
             if (listMode && state.sortMode !== 'location' && entry.classNode) {
-                label.appendChild(textSpan(shortListClassLabel(entry.classNode), 'class-context'));
+                inlineMetadata.appendChild(textSpan(
+                    shortListClassLabel(entry.classNode),
+                    'class-context metadata-class-context',
+                ));
             }
-            appendMetadata(label, node, hasChildren);
+            appendMetadata(inlineMetadata, node, hasChildren);
 
             const rightMeta = document.createElement('div');
             rightMeta.className = 'right-meta';
@@ -1686,7 +1791,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             });
             actions.append(runButton, copyButton);
 
-            row.append(twisty, status, label, rightMeta, actions);
+            row.append(twisty, status, label, inlineMetadata, rightMeta, actions);
             row.addEventListener('click', (event) => {
                 hideCopyMenu();
                 if (event.ctrlKey || event.metaKey) {
@@ -1720,16 +1825,19 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function appendMetadata(label, node, hasChildren) {
             const tags = (node.tags || []).slice(0, 2).map(tag => '@' + tag).join(' ');
             if (node.description) {
-                label.appendChild(textSpan(node.description, 'description'));
+                label.appendChild(textSpan(
+                    node.description,
+                    node.isVirtual ? 'description metadata-virtual-hint' : 'description metadata-description',
+                ));
             }
             if (node.inheritedFrom) {
                 label.appendChild(textSpan(
                     'inherited from ' + shortTypeName(node.inheritedFrom),
-                    'class-context',
+                    'class-context metadata-inheritance',
                 ));
             }
             if (tags) {
-                label.appendChild(textSpan(tags, 'tags'));
+                label.appendChild(textSpan(tags, 'tags metadata-tags'));
             }
         }
 
@@ -1743,14 +1851,17 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 if (duration !== undefined) {
                     container.appendChild(textSpan(formatDuration(duration), 'duration'));
                 }
-                appendMetaPart(container, stats.passed || 0, 'passed');
-                appendMetaPart(container, stats.failed || 0, 'failed');
-                appendMetaPart(container, stats.error || 0, 'error');
-                appendMetaPart(container, stats.skipped || 0, 'skipped');
+                const statsMeta = document.createElement('span');
+                statsMeta.className = 'stats-meta';
+                appendMetaPart(statsMeta, stats.passed || 0, 'passed');
+                appendMetaPart(statsMeta, stats.failed || 0, 'failed');
+                appendMetaPart(statsMeta, stats.error || 0, 'error');
+                appendMetaPart(statsMeta, stats.skipped || 0, 'skipped');
                 const total = document.createElement('span');
                 total.className = 'meta-part meta-total';
                 total.append(metricTotalIcon(), textSpan(String(stats.total)));
-                container.appendChild(total);
+                statsMeta.appendChild(total);
+                container.appendChild(statsMeta);
                 return;
             }
             if (typeof node.durationMs === 'number') {

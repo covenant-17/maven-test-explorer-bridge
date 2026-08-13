@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
 import { scanTestFiles, TestClassInfo } from './javaTestScanner';
 import { parseReportFile, SuiteResult, TestCaseResult } from './surefireParser';
-import { TestTreeBuilder } from './testTreeBuilder';
+import { InlineTestBridge } from './inlineTestBridge';
 import { publishResults } from './resultPublisher';
 import {
     buildRerunFailedArgs,
@@ -16,19 +16,12 @@ import {
 } from './mavenRunner';
 import { readSettings } from './settings';
 import {
-    CMD_ATTACH_TO_CLAUDE,
-    CMD_ATTACH_TO_COPILOT,
     CMD_REVEAL_IN_CUSTOM_EXPLORER,
+    CMD_CONFIGURE_TREE_PARTS,
+    CMD_CONFIGURE_LIST_PARTS,
     CMD_CLEAN_REPORTS,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
-    CMD_COPY,
-    CMD_COPY_CLASS_NAME,
-    CMD_COPY_FULL_PATH,
-    CMD_COPY_ITEM_MAVEN_COMMAND,
-    CMD_COPY_MAVEN_COMMAND,
-    CMD_COPY_METHOD_NAME,
-    CMD_COPY_PACKAGE_NAME,
     CMD_COLLAPSE_ALL,
     CMD_EXPAND_ALL,
     CMD_REFRESH_TESTS,
@@ -54,7 +47,7 @@ import {
     OUTPUT_CHANNEL_NAME,
     RUN_PROFILE_LABEL,
 } from './constants';
-import { clearHistory, loadHistory, saveRunToHistory } from './runHistory';
+import { clearHistory, loadHistory, saveRunToHistory, trimHistory } from './runHistory';
 import {
     buildCustomTree,
     CustomSortDirection,
@@ -66,6 +59,17 @@ import {
     nodePathLabel,
 } from './customTestModel';
 import { CUSTOM_VIEW_ID, CustomTestWebviewProvider } from './customTestWebview';
+import {
+    CONFIGURABLE_TEST_ROW_PARTS,
+    normalizeTestMetadataParts,
+    normalizeTestRowParts,
+    TEST_METADATA_PART_LABELS,
+    TEST_METADATA_PARTS,
+    TEST_ROW_PART_LABELS,
+    TEST_ROW_PARTS,
+    TestMetadataPart,
+    TestRowPart,
+} from './rowVisibility';
 
 interface RunTarget {
     module: MavenModule;
@@ -98,10 +102,14 @@ const FILTER_KEY = 'mavenTestExplorer.customFilter';
 const SORT_MODE_KEY = 'mavenTestExplorer.customSortMode';
 const SORT_DIRECTION_KEY = 'mavenTestExplorer.customSortDirection';
 const VIEW_MODE_KEY = 'mavenTestExplorer.customViewMode';
+let treeVisibleParts: readonly TestRowPart[] = TEST_ROW_PARTS;
+let listVisibleParts: readonly TestRowPart[] = TEST_ROW_PARTS;
+let treeMetadataParts: readonly TestMetadataPart[] = TEST_METADATA_PARTS;
+let listMetadataParts: readonly TestMetadataPart[] = TEST_METADATA_PARTS;
 
 let provider: CustomTestWebviewProvider;
 let inlineController: vscode.TestController;
-let inlineTreeBuilder: TestTreeBuilder;
+let inlineTestBridge: InlineTestBridge;
 let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -110,7 +118,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
 
     inlineController = vscode.tests.createTestController(EXTENSION_ID, CONTROLLER_LABEL);
-    inlineTreeBuilder = new TestTreeBuilder(inlineController);
+    inlineTestBridge = new InlineTestBridge(inlineController);
     context.subscriptions.push(inlineController);
     inlineController.createRunProfile(
         RUN_PROFILE_LABEL,
@@ -123,6 +131,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeSortMode = context.workspaceState.get<CustomSortMode>(SORT_MODE_KEY, 'location');
     activeSortDirection = context.workspaceState.get<CustomSortDirection>(SORT_DIRECTION_KEY, 'asc');
     activeViewMode = context.workspaceState.get<'tree' | 'list'>(VIEW_MODE_KEY, 'tree');
+    loadRowVisibility();
     selectedNodeId = context.workspaceState.get<string>(SELECTED_ID_KEY);
     for (const id of context.workspaceState.get<string[]>(EXPANDED_IDS_KEY, [])) {
         expandedIds.add(id);
@@ -143,13 +152,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         selectNode: (id) => selectNode(context, id),
         setExpanded: (id, expanded) => setExpanded(context, id, expanded),
         copy: (kind, id) => copyNode(kind, id),
-        attach: (kind, id) => attachNode(kind, id),
     });
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(CUSTOM_VIEW_ID, provider));
 
     registerCommands(context);
     registerJavaAutoRefresh(context);
     registerReportWatcher(context);
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('mavenTestExplorer.rowLayout')) {
+            loadRowVisibility();
+            rebuildTree();
+        }
+        if (event.affectsConfiguration('mavenTestExplorer.maxHistoryEntries')) {
+            void trimHistory(context, readSettings().maxHistoryEntries);
+        }
+    }));
 
     currentModules = await discoverModules();
     if (currentModules.length === 0) {
@@ -176,7 +193,7 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
         modulesWithClasses.push({ module, classes });
         outputChannel.appendLine(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
     }
-    inlineTreeBuilder.buildTree(modulesWithClasses);
+    inlineTestBridge.buildTree(modulesWithClasses);
     inlineResultFingerprint = '';
     rebuildTree();
     if (showMessage) {
@@ -213,6 +230,10 @@ function rebuildTree(): void {
         viewMode: activeViewMode,
         sortMode: activeSortMode,
         sortDirection: activeSortDirection,
+        treeVisibleParts,
+        listVisibleParts,
+        treeMetadataParts,
+        listMetadataParts,
     });
     void vscode.commands.executeCommand(
         'setContext',
@@ -239,7 +260,7 @@ function syncInlineResults(): void {
     }
     inlineResultFingerprint = fingerprint;
     if (results.length > 0) {
-        publishResults(inlineController, inlineTreeBuilder, results, outputChannel, undefined, true);
+        publishResults(inlineController, inlineTestBridge, results, outputChannel, undefined, true);
     }
 }
 
@@ -582,7 +603,7 @@ async function runTargets(
     try {
         for (const target of executionTargets) {
             if (settings.clearReportsBeforeRun) {
-                clearReportDirectories(target.module.moduleDir);
+                clearReportDirectories(target.module.moduleDir, settings.reportGlobs);
                 outputChannel.appendLine(`[Runner] Cleared reports in: ${target.module.moduleDir}`);
             }
 
@@ -634,14 +655,13 @@ async function runTargets(
             if (allResults.length > 0) {
                 publishResults(
                     undefined,
-                    inlineTreeBuilder,
+                    inlineTestBridge,
                     allResults,
                     outputChannel,
                     undefined,
                     false,
                     inlineRun,
                 );
-                inlineTreeBuilder.updateAggregates(Array.from(resultCache.values()));
                 inlineResultFingerprint = inlineResultsFingerprint(Array.from(resultCache.values()));
             }
         } finally {
@@ -738,7 +758,7 @@ function inlineItemsForTargets(targets: readonly RunTarget[]): vscode.TestItem[]
         if (node?.kind !== 'method' || !node.fqcn || !node.methodName) {
             continue;
         }
-        const item = inlineTreeBuilder.findMethodItem(node.fqcn, node.methodName);
+        const item = inlineTestBridge.findMethodItem(node.fqcn, node.methodName);
         if (item) {
             items.set(item.id, item);
         }
@@ -854,30 +874,169 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_SORT_BY_DURATION_DESC, () => setSortMode(context, 'duration')),
         vscode.commands.registerCommand(CMD_SHOW_TREE_VIEW, () => setViewMode(context, 'tree')),
         vscode.commands.registerCommand(CMD_SHOW_LIST_VIEW, () => setViewMode(context, 'list')),
+        vscode.commands.registerCommand(CMD_CONFIGURE_TREE_PARTS, () => configureVisibleParts('tree')),
+        vscode.commands.registerCommand(CMD_CONFIGURE_LIST_PARTS, () => configureVisibleParts('list')),
         vscode.commands.registerCommand(CMD_RERUN_FAILED, () => rerunFailed(context)),
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, async () => {
+            const reportGlobs = readSettings().reportGlobs;
             for (const module of currentModules) {
-                clearReportDirectories(module.moduleDir);
+                clearReportDirectories(module.moduleDir, reportGlobs);
             }
             vscode.window.showInformationMessage('Maven Test Explorer: Report XML files cleaned.');
         }),
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, () => clearResults(context, false)),
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, () => clearResults(context, true)),
         vscode.commands.registerCommand(CMD_SHOW_HISTORY, () => showHistory(context)),
-        vscode.commands.registerCommand(CMD_COPY, () => copyNode('path')),
-        vscode.commands.registerCommand(CMD_COPY_MAVEN_COMMAND, () => copyNode('maven')),
-        vscode.commands.registerCommand(CMD_COPY_ITEM_MAVEN_COMMAND, () => copyNode('maven')),
-        vscode.commands.registerCommand(CMD_COPY_CLASS_NAME, () => copyNode('class')),
-        vscode.commands.registerCommand(CMD_COPY_METHOD_NAME, () => copyNode('method')),
-        vscode.commands.registerCommand(CMD_COPY_PACKAGE_NAME, () => copyNode('package')),
-        vscode.commands.registerCommand(CMD_COPY_FULL_PATH, () => copyNode('file')),
-        vscode.commands.registerCommand(CMD_ATTACH_TO_COPILOT, () => attachNode('copilot')),
-        vscode.commands.registerCommand(CMD_ATTACH_TO_CLAUDE, () => attachNode('claude')),
         vscode.commands.registerCommand(
             CMD_REVEAL_IN_CUSTOM_EXPLORER,
             (item: vscode.TestItem) => revealInlineItemInCustomExplorer(context, item),
         ),
     );
+}
+
+async function configureVisibleParts(
+    view: 'tree' | 'list',
+): Promise<void> {
+    interface LayoutQuickPickItem extends vscode.QuickPickItem {
+        readonly part?: TestRowPart;
+        readonly metadataPart?: TestMetadataPart;
+    }
+
+    const selectedParts = new Set(view === 'tree' ? treeVisibleParts : listVisibleParts);
+    const selectedMetadata = new Set(view === 'tree' ? treeMetadataParts : listMetadataParts);
+    const picker = vscode.window.createQuickPick<LayoutQuickPickItem>();
+    picker.canSelectMany = true;
+    picker.title = `Configure ${view === 'tree' ? 'Tree' : 'List'} Visible Parts`;
+    picker.placeholder = 'Select the parts rendered in each test row';
+    picker.matchOnDescription = true;
+    let metadataExpanded = false;
+    let rebuilding = false;
+
+    const refreshItems = (): void => {
+        const items: LayoutQuickPickItem[] = [{
+            label: 'Always visible: Expander',
+            kind: vscode.QuickPickItemKind.Separator,
+        }];
+        for (const part of CONFIGURABLE_TEST_ROW_PARTS) {
+            items.push({
+                label: TEST_ROW_PART_LABELS[part],
+                description: rowPartDescription(part),
+                part,
+                buttons: part === 'metadata'
+                    ? [{
+                        iconPath: new vscode.ThemeIcon(metadataExpanded ? 'chevron-down' : 'chevron-right'),
+                        tooltip: metadataExpanded ? 'Hide metadata options' : 'Configure metadata options',
+                    }]
+                    : undefined,
+            });
+            if (part === 'metadata' && metadataExpanded) {
+                for (const metadataPart of TEST_METADATA_PARTS) {
+                    items.push({
+                        label: `\u00a0\u00a0\u00a0${TEST_METADATA_PART_LABELS[metadataPart]}`,
+                        description: metadataPartDescription(metadataPart),
+                        metadataPart,
+                    });
+                }
+            }
+        }
+        rebuilding = true;
+        picker.items = items;
+        picker.selectedItems = items.filter((item) => (
+            item.part ? selectedParts.has(item.part) : Boolean(item.metadataPart && selectedMetadata.has(item.metadataPart))
+        ));
+        rebuilding = false;
+    };
+
+    const accepted = await new Promise<boolean>((resolve) => {
+        const disposables = [
+            picker.onDidChangeSelection((selection) => {
+                if (rebuilding) {
+                    return;
+                }
+                const selectedRowParts = new Set(selection.flatMap((item) => item.part ? [item.part] : []));
+                for (const part of CONFIGURABLE_TEST_ROW_PARTS) {
+                    if (selectedRowParts.has(part)) selectedParts.add(part);
+                    else selectedParts.delete(part);
+                }
+                if (metadataExpanded) {
+                    const selectedMetadataParts = new Set(selection.flatMap(
+                        (item) => item.metadataPart ? [item.metadataPart] : [],
+                    ));
+                    for (const part of TEST_METADATA_PARTS) {
+                        if (selectedMetadataParts.has(part)) selectedMetadata.add(part);
+                        else selectedMetadata.delete(part);
+                    }
+                }
+            }),
+            picker.onDidTriggerItemButton((event) => {
+                if (event.item.part === 'metadata') {
+                    metadataExpanded = !metadataExpanded;
+                    refreshItems();
+                }
+            }),
+            picker.onDidAccept(() => {
+                resolve(true);
+                picker.hide();
+            }),
+            picker.onDidHide(() => resolve(false)),
+        ];
+        picker.onDidHide(() => {
+            for (const disposable of disposables) disposable.dispose();
+            picker.dispose();
+        });
+        refreshItems();
+        picker.show();
+    });
+    if (!accepted) {
+        return;
+    }
+    const configuration = vscode.workspace.getConfiguration('mavenTestExplorer');
+    const currentLayout = configuration.get<RowLayoutConfiguration>('rowLayout', {});
+    await configuration.update('rowLayout', {
+        ...currentLayout,
+        [view]: CONFIGURABLE_TEST_ROW_PARTS.filter((part) => selectedParts.has(part)),
+        [`${view}Metadata`]: TEST_METADATA_PARTS.filter((part) => selectedMetadata.has(part)),
+    }, vscode.ConfigurationTarget.Global);
+    loadRowVisibility();
+    rebuildTree();
+}
+
+function loadRowVisibility(): void {
+    const layout = vscode.workspace.getConfiguration('mavenTestExplorer')
+        .get<RowLayoutConfiguration>('rowLayout', {});
+    treeVisibleParts = normalizeTestRowParts(layout.tree);
+    listVisibleParts = normalizeTestRowParts(layout.list);
+    treeMetadataParts = normalizeTestMetadataParts(layout.treeMetadata);
+    listMetadataParts = normalizeTestMetadataParts(layout.listMetadata);
+}
+
+interface RowLayoutConfiguration {
+    readonly tree?: readonly string[];
+    readonly list?: readonly string[];
+    readonly treeMetadata?: readonly string[];
+    readonly listMetadata?: readonly string[];
+}
+
+function rowPartDescription(part: TestRowPart): string {
+    switch (part) {
+        case 'expander': return 'Expand and collapse chevron';
+        case 'status': return 'Passed, failed, skipped, or running status';
+        case 'kindIcon': return 'Project, package, class, or method icon';
+        case 'name': return 'Project folder, package, class, or test method name';
+        case 'metadata': return 'Tags, inheritance, descriptions, and virtual-test hints';
+        case 'duration': return 'Execution duration';
+        case 'stats': return 'Aggregate passed, failed, skipped, and total counts';
+    }
+}
+
+function metadataPartDescription(part: TestMetadataPart): string {
+    switch (part) {
+        case 'description': return 'Java name shown when @DisplayName replaces it';
+        case 'tags': return 'JUnit tags';
+        case 'inheritance': return 'Interface or superclass declaring the inherited test';
+        case 'classContext': return 'Owning class shown beside flat-list methods';
+        case 'virtualHint': return 'Virtual invocation and parent-navigation hint';
+    }
 }
 
 async function clearResults(context: vscode.ExtensionContext, withHistory: boolean): Promise<void> {
@@ -887,7 +1046,7 @@ async function clearResults(context: vscode.ExtensionContext, withHistory: boole
     if (withHistory) {
         clearHistory(context);
     }
-    inlineTreeBuilder.buildTree(modulesWithClasses);
+    inlineTestBridge.buildTree(modulesWithClasses);
     inlineResultFingerprint = '';
     rebuildTree();
     vscode.window.showInformationMessage(withHistory
@@ -1083,32 +1242,9 @@ async function mavenCommandForNode(node: CustomTestNode): Promise<string | undef
     return args.join(' ');
 }
 
-async function attachNode(kind: 'copilot' | 'claude', id = selectedNodeId): Promise<void> {
-    const node = id ? currentTree.nodesById.get(id) : undefined;
-    if (!node?.sourcePath) {
-        vscode.window.showInformationMessage('Maven Test Explorer: Select a test node with source first.');
-        return;
-    }
-    await openNode(node.id);
-    const editor = vscode.window.activeTextEditor;
-    if (editor) {
-        const line = Math.max((node.line ?? 1) - 1, 0);
-        const range = new vscode.Range(new vscode.Position(line, 0), new vscode.Position(line, 0));
-        editor.selection = new vscode.Selection(range.start, range.end);
-    }
-    if (kind === 'copilot') {
-        try { await vscode.commands.executeCommand('github.copilot.chat.attachSelection'); } catch { /* optional */ }
-        try { await vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus'); } catch { /* optional */ }
-    } else {
-        try { await vscode.commands.executeCommand('claude-vscode.insertAtMention'); } catch { /* optional */ }
-        const suffix = node.line ? `#${node.line}` : '';
-        await vscode.env.clipboard.writeText(`${node.sourcePath}${suffix}`);
-        try { await vscode.commands.executeCommand('claude-vscode.focus'); } catch { /* optional */ }
-    }
-}
-
 function registerJavaAutoRefresh(context: vscode.ExtensionContext): void {
     let refreshDebounce: NodeJS.Timeout | undefined;
+    let watchers: vscode.FileSystemWatcher[] = [];
     const schedule = () => {
         const settings = readSettings();
         if (!settings.autoRefreshOnSave) {
@@ -1122,20 +1258,42 @@ function registerJavaAutoRefresh(context: vscode.ExtensionContext): void {
             void refresh(context, false);
         }, settings.autoRefreshDebounceMs);
     };
-    const watcher = vscode.workspace.createFileSystemWatcher('**/src/test/java/**/*.java');
-    watcher.onDidCreate(schedule);
-    watcher.onDidChange(schedule);
-    watcher.onDidDelete(schedule);
-    context.subscriptions.push(watcher);
+    const rebuildWatchers = (): void => {
+        for (const watcher of watchers) watcher.dispose();
+        watchers = [];
+        const settings = readSettings();
+        if (!settings.autoRefreshOnSave) {
+            return;
+        }
+        for (const glob of new Set(settings.testSourceGlobs)) {
+            const watcher = vscode.workspace.createFileSystemWatcher(glob);
+            watcher.onDidCreate(schedule);
+            watcher.onDidChange(schedule);
+            watcher.onDidDelete(schedule);
+            watchers.push(watcher);
+        }
+    };
+    rebuildWatchers();
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration('mavenTestExplorer.autoRefreshOnSave')
+                || event.affectsConfiguration('mavenTestExplorer.testSourceGlobs')) {
+                rebuildWatchers();
+            }
+            if (event.affectsConfiguration('mavenTestExplorer.testSourceGlobs')) {
+                void refresh(context, false);
+            }
+        }),
+        new vscode.Disposable(() => {
+            if (refreshDebounce) clearTimeout(refreshDebounce);
+            for (const watcher of watchers) watcher.dispose();
+        }),
+    );
 }
 
 function registerReportWatcher(context: vscode.ExtensionContext): void {
-    const settings = readSettings();
-    if (!settings.watchReports) {
-        return;
-    }
-    const watcher = vscode.workspace.createFileSystemWatcher('**/target/{surefire-reports,failsafe-reports}/TEST-*.xml');
     let timer: NodeJS.Timeout | undefined;
+    let watchers: vscode.FileSystemWatcher[] = [];
     const pendingModuleDirs = new Set<string>();
     const schedule = (uri: vscode.Uri) => {
         if (running) {
@@ -1170,10 +1328,52 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
             rebuildTree();
         }, 500);
     };
-    watcher.onDidCreate(schedule);
-    watcher.onDidChange(schedule);
-    watcher.onDidDelete(schedule);
-    context.subscriptions.push(watcher);
+    const rebuildWatchers = (): void => {
+        for (const watcher of watchers) watcher.dispose();
+        watchers = [];
+        if (timer) {
+            clearTimeout(timer);
+            timer = undefined;
+        }
+        pendingModuleDirs.clear();
+        const settings = readSettings();
+        if (!settings.watchReports) {
+            return;
+        }
+        for (const glob of new Set(settings.reportGlobs)) {
+            const watcher = vscode.workspace.createFileSystemWatcher(glob);
+            watcher.onDidCreate(schedule);
+            watcher.onDidChange(schedule);
+            watcher.onDidDelete(schedule);
+            watchers.push(watcher);
+        }
+    };
+    rebuildWatchers();
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration('mavenTestExplorer.watchReports')
+                || event.affectsConfiguration('mavenTestExplorer.reportGlobs')) {
+                rebuildWatchers();
+            }
+            if (event.affectsConfiguration('mavenTestExplorer.reportGlobs')) {
+                void reloadConfiguredReports(context);
+            }
+        }),
+        new vscode.Disposable(() => {
+            if (timer) clearTimeout(timer);
+            for (const watcher of watchers) watcher.dispose();
+        }),
+    );
+}
+
+async function reloadConfiguredReports(context: vscode.ExtensionContext): Promise<void> {
+    const reportGlobs = readSettings().reportGlobs;
+    const results = currentModules.flatMap((module) => readAllReports(module.moduleDir, reportGlobs));
+    resultCache.clear();
+    updateResultCache(results, new Set());
+    updateFailedClasses(results);
+    await saveResultCache(context);
+    rebuildTree();
 }
 
 async function discoverModules(): Promise<MavenModule[]> {
