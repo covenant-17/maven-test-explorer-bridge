@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-0.2.13-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -16,7 +16,7 @@
 
 When tests are run via **Maven** (from a terminal, a CI pipeline, or an AI agent like Claude Code), the VS Code Testing sidebar stays silent — it simply doesn't know what happened.
 
-This extension fixes that. It watches `target/surefire-reports/TEST-*.xml`, parses the results, and pushes them into the native VS Code Testing UI automatically.
+This extension fixes that. It discovers Maven tests, watches `target/surefire-reports/TEST-*.xml`, and renders the results in its dedicated Maven Test Explorer view in the Testing sidebar.
 
 **Maven runs the tests. VS Code shows the results. That's it.**
 
@@ -136,7 +136,7 @@ target/surefire-reports/TEST-*.xml
  surefireParser
       │
       ▼
- resultPublisher  ──►  VS Code Testing API
+ resultPublisher  ──►  Custom Maven Test Explorer
       │
       ▼
  Test Explorer sidebar updated
@@ -156,7 +156,7 @@ src/
 ├── javaTestScanner.ts     # Scans Java sources, detects @Test / @Nested
 ├── testTreeBuilder.ts     # Builds VS Code TestItem hierarchy
 ├── surefireParser.ts      # Parses TEST-*.xml via fast-xml-parser
-├── resultPublisher.ts     # Pushes results into VS Code Testing API
+├── resultPublisher.ts     # Maps Surefire results onto discovered tests
 ├── mavenRunner.ts         # Spawns Maven process
 ├── reportWatcher.ts       # FileSystemWatcher + debounce
 ├── runHistory.ts          # Workspace-scoped run history

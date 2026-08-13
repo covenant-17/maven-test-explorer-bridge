@@ -1058,14 +1058,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             let end = cursor;
             let inQuotes = false;
             for (let index = 0; index < cursor; index++) {
-                if (value[index] === '"' && value[index - 1] !== '\\') {
+                if (value[index] === '"' && value[index - 1] !== '\\\\') {
                     inQuotes = !inQuotes;
                 } else if (!inQuotes && /[\\s(),]/.test(value[index])) {
                     start = index + 1;
                 }
             }
             while (end < value.length) {
-                if (value[end] === '"' && value[end - 1] !== '\\') {
+                if (value[end] === '"' && value[end - 1] !== '\\\\') {
                     inQuotes = !inQuotes;
                 } else if (!inQuotes && /[\\s(),]/.test(value[end])) {
                     break;

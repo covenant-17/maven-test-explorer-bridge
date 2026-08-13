@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0] - 2026-08-13
+
+### Changed
+
+- **Custom Maven Test Explorer** - completed the move to a dedicated test tree with deterministic discovery, flexible sorting, multi-selection, grouped Maven execution, source navigation, and contextual actions.
+- **Advanced filtering** - added project-scoped JUnit tag and annotation suggestions, contextual match counts, quoted values, status filters, and AND/OR expressions.
+- **Parameterized results** - added generated invocation nodes and parent indicators for parameterized Surefire test cases.
+
+### Fixed
+
+- Fixed a webview script escaping error that could leave the Maven Test Explorer tree completely blank.
+- Added release-time validation of the generated webview JavaScript to prevent blank-screen syntax regressions.
+
+---
+
 ## [0.2.13] - 2026-08-13
 
 ### Added
@@ -176,7 +191,7 @@
 
 ---
 
-## [1.0.0] — 2026-05-06
+## [0.1.0] — 2026-05-06
 
 ### Added
 
