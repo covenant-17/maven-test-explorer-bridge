@@ -6,7 +6,8 @@ import { parseFilterExpression, TestFilterExpression } from './filterExpression'
 
 export type CustomNodeKind = 'module' | 'package' | 'class' | 'method' | 'virtualMethod' | 'lifecycle';
 export type CustomNodeStatus = TestCaseStatus | 'unknown';
-export type CustomSortMode = 'location' | 'status' | 'duration';
+export type CustomSortMode = 'location' | 'name' | 'status' | 'duration';
+export type CustomSortDirection = 'asc' | 'desc';
 
 export interface CustomNodeStats {
     passed: number;
@@ -63,6 +64,7 @@ export interface CustomTreeRuntimeState {
     readonly runningNodeIds?: ReadonlySet<string>;
     readonly suiteResults?: readonly SuiteResult[];
     readonly sortMode?: CustomSortMode;
+    readonly sortDirection?: CustomSortDirection;
 }
 
 const EMPTY_STATS: CustomNodeStats = { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 };
@@ -184,7 +186,11 @@ export function buildCustomTree(
     const completedRuntimeNodeIds = materializeResults(runtimeState?.suiteResults ?? [], modulesWithClasses, moduleByDir, nodesById, classByFqcn, methodByFqcnAndName);
     rollupAll(roots);
     for (const root of roots) {
-        organizeChildren(root, runtimeState?.sortMode ?? 'location');
+        organizeChildren(
+            root,
+            runtimeState?.sortMode ?? 'location',
+            runtimeState?.sortDirection ?? 'asc',
+        );
     }
     applyRunningState(roots, runtimeState?.runningNodeIds, completedRuntimeNodeIds);
 
@@ -580,14 +586,18 @@ function directParentClassName(className: string): string | undefined {
     return className.substring(0, index);
 }
 
-function organizeChildren(node: CustomTestNode, sortMode: CustomSortMode = 'location'): void {
+function organizeChildren(
+    node: CustomTestNode,
+    sortMode: CustomSortMode = 'location',
+    sortDirection: CustomSortDirection = 'asc',
+): void {
     const indexed = node.children.map((child, index) => ({ child, index }));
     indexed.sort((a, b) => {
         const groupDelta = childGroup(a.child) - childGroup(b.child);
         if (groupDelta !== 0) {
             return groupDelta;
         }
-        const nameDelta = compareSiblingNodes(a.child, b.child, sortMode);
+        const nameDelta = compareSiblingNodes(a.child, b.child, sortMode, sortDirection);
         if (nameDelta !== 0) {
             return nameDelta;
         }
@@ -595,7 +605,7 @@ function organizeChildren(node: CustomTestNode, sortMode: CustomSortMode = 'loca
     });
     node.children = indexed.map((entry) => entry.child);
     for (const child of node.children) {
-        organizeChildren(child, sortMode);
+        organizeChildren(child, sortMode, sortDirection);
     }
 }
 
@@ -606,33 +616,53 @@ function childGroup(node: CustomTestNode): number {
     return 1;
 }
 
-function compareSiblingNodes(a: CustomTestNode, b: CustomTestNode, sortMode: CustomSortMode): number {
-    if (sortMode === 'status') {
-        const statusDelta = statusSortRank(a.status) - statusSortRank(b.status);
+function compareSiblingNodes(
+    a: CustomTestNode,
+    b: CustomTestNode,
+    sortMode: CustomSortMode,
+    sortDirection: CustomSortDirection,
+): number {
+    if (sortMode === 'name') {
+        const nameDelta = a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+        if (nameDelta !== 0) {
+            return sortDirection === 'asc' ? nameDelta : -nameDelta;
+        }
+    } else if (sortMode === 'status') {
+        const statusDelta = directionalDelta(
+            statusSortRank(a.status),
+            statusSortRank(b.status),
+            sortDirection,
+        );
         if (statusDelta !== 0) {
             return statusDelta;
         }
     } else if (sortMode === 'duration') {
-        const durationDelta = nodeDuration(b) - nodeDuration(a);
+        const durationDelta = directionalDelta(nodeDuration(a), nodeDuration(b), sortDirection);
         if (durationDelta !== 0) {
             return durationDelta;
         }
     }
     if (a.kind === 'method' && b.kind === 'method' && a.line !== undefined && b.line !== undefined) {
-        return a.line - b.line;
+        const lineDelta = a.line - b.line;
+        return sortMode === 'location' && sortDirection === 'desc' ? -lineDelta : lineDelta;
     }
     if (a.kind !== 'method' && b.kind !== 'method') {
-        return nodeSortKey(a).localeCompare(nodeSortKey(b));
+        const labelDelta = nodeSortKey(a).localeCompare(nodeSortKey(b));
+        return sortMode === 'location' && sortDirection === 'desc' ? -labelDelta : labelDelta;
     }
     return 0;
 }
 
+function directionalDelta(a: number, b: number, direction: CustomSortDirection): number {
+    return direction === 'asc' ? a - b : b - a;
+}
+
 function statusSortRank(status: CustomNodeStatus): number {
-    if (status === 'error') { return 0; }
-    if (status === 'failed') { return 1; }
+    if (status === 'error') { return 4; }
+    if (status === 'failed') { return 3; }
     if (status === 'skipped') { return 2; }
-    if (status === 'passed') { return 3; }
-    return 4;
+    if (status === 'passed') { return 1; }
+    return 0;
 }
 
 function nodeDuration(node: CustomTestNode): number {

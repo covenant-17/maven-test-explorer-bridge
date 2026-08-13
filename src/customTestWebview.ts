@@ -1933,6 +1933,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 'Passed: ' + stats.passed + ' | Failed: ' + stats.failed + ' | Error: ' + stats.error + ' | Skipped: ' + stats.skipped + ' | Total: ' + stats.total,
                 'Duration: ' + (duration !== undefined ? formatDuration(duration) : 'not run'),
             ];
+            if (node.tags && node.tags.length > 0) {
+                lines.push('Tags: ' + node.tags.map(tag => '@' + tag).join(' '));
+            }
             if (node.hasVirtualInvocations) {
                 lines.push('Results are in generated test cases');
             }

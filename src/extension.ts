@@ -3,7 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
 import { scanTestFiles, TestClassInfo } from './javaTestScanner';
-import { parseReportFile, SuiteResult } from './surefireParser';
+import { parseReportFile, SuiteResult, TestCaseResult } from './surefireParser';
+import { TestTreeBuilder } from './testTreeBuilder';
+import { publishResults } from './resultPublisher';
 import {
     buildRerunFailedArgs,
     buildRunAllArgs,
@@ -33,13 +35,26 @@ import {
     CMD_RUN_ALL_TESTS,
     CMD_SHOW_HISTORY,
     CMD_SORT_BY_DURATION,
+    CMD_SORT_BY_DURATION_ASC,
+    CMD_SORT_BY_DURATION_DESC,
     CMD_SORT_BY_LOCATION,
+    CMD_SORT_BY_LOCATION_ASC,
+    CMD_SORT_BY_LOCATION_DESC,
+    CMD_SORT_BY_NAME,
+    CMD_SORT_BY_NAME_ASC,
+    CMD_SORT_BY_NAME_DESC,
     CMD_SORT_BY_STATUS,
+    CMD_SORT_BY_STATUS_ASC,
+    CMD_SORT_BY_STATUS_DESC,
+    CONTROLLER_LABEL,
+    EXTENSION_ID,
     OUTPUT_CHANNEL_NAME,
+    RUN_PROFILE_LABEL,
 } from './constants';
 import { clearHistory, loadHistory, saveRunToHistory } from './runHistory';
 import {
     buildCustomTree,
+    CustomSortDirection,
     CustomSortMode,
     CustomTestNode,
     CustomTreeSnapshot,
@@ -61,6 +76,7 @@ let modulesWithClasses: ModuleClasses[] = [];
 let currentTree: CustomTreeSnapshot = emptyTree();
 let activeFilterExpression = '';
 let activeSortMode: CustomSortMode = 'location';
+let activeSortDirection: CustomSortDirection = 'asc';
 let selectedNodeId: string | undefined;
 let running = false;
 let runtimeRunningNodeIds = new Set<string>();
@@ -74,16 +90,31 @@ const EXPANDED_IDS_KEY = 'mavenTestExplorer.customExpandedIds';
 const SELECTED_ID_KEY = 'mavenTestExplorer.customSelectedId';
 const FILTER_KEY = 'mavenTestExplorer.customFilter';
 const SORT_MODE_KEY = 'mavenTestExplorer.customSortMode';
+const SORT_DIRECTION_KEY = 'mavenTestExplorer.customSortDirection';
 
 let provider: CustomTestWebviewProvider;
+let inlineController: vscode.TestController;
+let inlineTreeBuilder: TestTreeBuilder;
+let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
     context.subscriptions.push(outputChannel);
     outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
 
+    inlineController = vscode.tests.createTestController(EXTENSION_ID, CONTROLLER_LABEL);
+    inlineTreeBuilder = new TestTreeBuilder(inlineController);
+    context.subscriptions.push(inlineController);
+    inlineController.createRunProfile(
+        RUN_PROFILE_LABEL,
+        vscode.TestRunProfileKind.Run,
+        async (request) => runInlineRequest(context, request),
+        true,
+    );
+
     activeFilterExpression = context.workspaceState.get<string>(FILTER_KEY, '');
     activeSortMode = context.workspaceState.get<CustomSortMode>(SORT_MODE_KEY, 'location');
+    activeSortDirection = context.workspaceState.get<CustomSortDirection>(SORT_DIRECTION_KEY, 'asc');
     selectedNodeId = context.workspaceState.get<string>(SELECTED_ID_KEY);
     for (const id of context.workspaceState.get<string[]>(EXPANDED_IDS_KEY, [])) {
         expandedIds.add(id);
@@ -134,6 +165,8 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
         modulesWithClasses.push({ module, classes });
         outputChannel.appendLine(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
     }
+    inlineTreeBuilder.buildTree(modulesWithClasses);
+    inlineResultFingerprint = '';
     rebuildTree();
     if (showMessage) {
         vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
@@ -149,6 +182,7 @@ function rebuildTree(): void {
             runningNodeIds: runtimeRunningNodeIds,
             suiteResults: Array.from(runtimeResultByXmlPath.values()),
             sortMode: activeSortMode,
+            sortDirection: activeSortDirection,
         },
     );
     if (!selectedNodeId || !currentTree.nodesById.has(selectedNodeId)) {
@@ -172,6 +206,61 @@ function rebuildTree(): void {
         hasVisibleExpandedItems(currentTree.filteredRoots),
     );
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.sortMode', activeSortMode);
+    void vscode.commands.executeCommand(
+        'setContext',
+        'mavenTestExplorer.sortState',
+        `${activeSortMode}${activeSortDirection === 'asc' ? 'Asc' : 'Desc'}`,
+    );
+    syncInlineResults();
+}
+
+function syncInlineResults(): void {
+    const results = Array.from(resultCache.values());
+    const fingerprint = inlineResultsFingerprint(results);
+    if (fingerprint === inlineResultFingerprint) {
+        return;
+    }
+    inlineResultFingerprint = fingerprint;
+    if (results.length > 0) {
+        publishResults(inlineController, inlineTreeBuilder, results, outputChannel, undefined, true);
+    }
+}
+
+function inlineResultsFingerprint(results: readonly SuiteResult[]): string {
+    return JSON.stringify(results.map((suite) => [
+        suite.xmlPath,
+        suite.testCases.map((testCase) => [testCase.className, testCase.methodName, testCase.status, testCase.durationMs]),
+    ]));
+}
+
+async function runInlineRequest(
+    context: vscode.ExtensionContext,
+    request: vscode.TestRunRequest,
+): Promise<void> {
+    const requestedIds = (request.include ?? [])
+        .map((item) => customNodeIdForInlineItem(item))
+        .filter((id): id is string => Boolean(id));
+    if (requestedIds.length === 0) {
+        await runAll(context);
+    } else {
+        await runNodes(context, requestedIds);
+    }
+}
+
+function customNodeIdForInlineItem(item: vscode.TestItem): string | undefined {
+    if (item.uri && item.range) {
+        const sourcePath = path.normalize(item.uri.fsPath).toLocaleLowerCase();
+        const line = item.range.start.line + 1;
+        for (const node of currentTree.nodesById.values()) {
+            if (node.kind === 'method'
+                && node.line === line
+                && node.sourcePath
+                && path.normalize(node.sourcePath).toLocaleLowerCase() === sourcePath) {
+                return node.id;
+            }
+        }
+    }
+    return currentTree.nodesById.has(item.id) ? item.id : undefined;
 }
 
 function hasVisibleExpandedItems(roots: readonly CustomTestNode[]): boolean {
@@ -349,6 +438,16 @@ async function runTargets(
     const cancellationSource = new vscode.CancellationTokenSource();
     const allResults: SuiteResult[] = [];
     const fullRunModuleDirs = new Set<string>();
+    const inlineItems = inlineItemsForTargets(targets);
+    const inlineRun = inlineController.createTestRun(
+        new vscode.TestRunRequest(inlineItems.length > 0 ? inlineItems : undefined),
+        historyLabel,
+        true,
+    );
+    for (const item of inlineItems) {
+        inlineRun.enqueued(item);
+        inlineRun.started(item);
+    }
 
     try {
         for (const target of targets) {
@@ -378,7 +477,10 @@ async function runTargets(
                 const result = await runMaven(target.module.moduleDir, args, outputChannel, cancellationSource.token);
                 poller.flush();
                 if (!result.cancelled) {
-                    const suiteResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
+                    const suiteResults = addSkippedResultsForLifecycleFailures(
+                        readAllReports(target.module.moduleDir, settings.reportGlobs),
+                        target.runningNodeIds ?? [],
+                    );
                     allResults.push(...suiteResults);
                 }
             } finally {
@@ -386,17 +488,106 @@ async function runTargets(
             }
         }
     } finally {
-        updateResultCache(allResults, fullRunModuleDirs);
-        updateFailedClasses(Array.from(resultCache.values()));
-        await saveResultCache(context);
-        if (settings.runHistoryEnabled) {
-            saveRunToHistory(context, allResults, historyLabel);
+        try {
+            updateResultCache(allResults, fullRunModuleDirs);
+            updateFailedClasses(Array.from(resultCache.values()));
+            await saveResultCache(context);
+            if (settings.runHistoryEnabled) {
+                saveRunToHistory(context, allResults, historyLabel);
+            }
+            if (allResults.length > 0) {
+                publishResults(
+                    undefined,
+                    inlineTreeBuilder,
+                    allResults,
+                    outputChannel,
+                    undefined,
+                    false,
+                    inlineRun,
+                );
+                inlineTreeBuilder.updateAggregates(Array.from(resultCache.values()));
+                inlineResultFingerprint = inlineResultsFingerprint(Array.from(resultCache.values()));
+            }
+        } finally {
+            inlineRun.end();
+            running = false;
+            runtimeRunningNodeIds = new Set();
+            runtimeResultByXmlPath = new Map();
+            rebuildTree();
         }
-        running = false;
-        runtimeRunningNodeIds = new Set();
-        runtimeResultByXmlPath = new Map();
-        rebuildTree();
     }
+}
+
+function addSkippedResultsForLifecycleFailures(
+    suiteResults: readonly SuiteResult[],
+    runningNodeIds: readonly string[],
+): SuiteResult[] {
+    const lifecycleFailureClasses = new Set<string>();
+    const reportedMethods = new Set<string>();
+    for (const suite of suiteResults) {
+        for (const testCase of suite.testCases) {
+            reportedMethods.add(`${testCase.className}#${testCase.methodName}`);
+            if (testCase.methodName.startsWith('@')
+                && (testCase.status === 'failed' || testCase.status === 'error')) {
+                lifecycleFailureClasses.add(testCase.className);
+            }
+        }
+    }
+    if (lifecycleFailureClasses.size === 0) {
+        return [...suiteResults];
+    }
+
+    const skippedByClass = new Map<string, TestCaseResult[]>();
+    for (const id of runningNodeIds) {
+        const node = currentTree.nodesById.get(id);
+        if (node?.kind !== 'method' || !node.fqcn || !node.methodName) {
+            continue;
+        }
+        const key = `${node.fqcn}#${node.methodName}`;
+        if (!lifecycleFailureClasses.has(node.fqcn) || reportedMethods.has(key)) {
+            continue;
+        }
+        const skipped = skippedByClass.get(node.fqcn) ?? [];
+        skipped.push({
+            className: node.fqcn,
+            methodName: node.methodName,
+            status: 'skipped',
+            durationMs: 0,
+            failureMessage: undefined,
+            failureType: undefined,
+            stackTrace: undefined,
+            systemOut: undefined,
+            systemErr: undefined,
+        });
+        skippedByClass.set(node.fqcn, skipped);
+        reportedMethods.add(key);
+    }
+
+    return suiteResults.map((suite) => {
+        const className = skippedByClass.has(suite.suiteName)
+            ? suite.suiteName
+            : suite.testCases[0]?.className ?? '';
+        const skipped = skippedByClass.get(className);
+        skippedByClass.delete(className);
+        return skipped?.length
+            ? { ...suite, testCases: [...suite.testCases, ...skipped] }
+            : suite;
+    });
+}
+
+function inlineItemsForTargets(targets: readonly RunTarget[]): vscode.TestItem[] {
+    const items = new Map<string, vscode.TestItem>();
+    for (const id of targets.flatMap((target) => target.runningNodeIds ?? [])) {
+        const node = currentTree.nodesById.get(id);
+        if (node?.kind !== 'method' || !node.fqcn || !node.methodName) {
+            continue;
+        }
+        const item = inlineTreeBuilder.findMethodItem(node.fqcn, node.methodName);
+        if (item) {
+            items.set(item.id, item);
+        }
+    }
+    return Array.from(items.values());
 }
 
 function nodeIdsForModule(module: MavenModule): string[] {
@@ -494,8 +685,17 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_EXPAND_ALL, () => setAllExpanded(context, true)),
         vscode.commands.registerCommand(CMD_COLLAPSE_ALL, () => setAllExpanded(context, false)),
         vscode.commands.registerCommand(CMD_SORT_BY_LOCATION, () => setSortMode(context, 'location')),
+        vscode.commands.registerCommand(CMD_SORT_BY_LOCATION_ASC, () => setSortMode(context, 'location')),
+        vscode.commands.registerCommand(CMD_SORT_BY_LOCATION_DESC, () => setSortMode(context, 'location')),
+        vscode.commands.registerCommand(CMD_SORT_BY_NAME, () => setSortMode(context, 'name')),
+        vscode.commands.registerCommand(CMD_SORT_BY_NAME_ASC, () => setSortMode(context, 'name')),
+        vscode.commands.registerCommand(CMD_SORT_BY_NAME_DESC, () => setSortMode(context, 'name')),
         vscode.commands.registerCommand(CMD_SORT_BY_STATUS, () => setSortMode(context, 'status')),
+        vscode.commands.registerCommand(CMD_SORT_BY_STATUS_ASC, () => setSortMode(context, 'status')),
+        vscode.commands.registerCommand(CMD_SORT_BY_STATUS_DESC, () => setSortMode(context, 'status')),
         vscode.commands.registerCommand(CMD_SORT_BY_DURATION, () => setSortMode(context, 'duration')),
+        vscode.commands.registerCommand(CMD_SORT_BY_DURATION_ASC, () => setSortMode(context, 'duration')),
+        vscode.commands.registerCommand(CMD_SORT_BY_DURATION_DESC, () => setSortMode(context, 'duration')),
         vscode.commands.registerCommand(CMD_RERUN_FAILED, () => rerunFailed(context)),
         vscode.commands.registerCommand(CMD_CLEAN_REPORTS, async () => {
             for (const module of currentModules) {
@@ -525,6 +725,8 @@ async function clearResults(context: vscode.ExtensionContext, withHistory: boole
     if (withHistory) {
         clearHistory(context);
     }
+    inlineTreeBuilder.buildTree(modulesWithClasses);
+    inlineResultFingerprint = '';
     rebuildTree();
     vscode.window.showInformationMessage(withHistory
         ? 'Maven Test Explorer: Results and history cleared.'
@@ -619,8 +821,16 @@ async function setAllExpanded(context: vscode.ExtensionContext, expanded: boolea
 }
 
 async function setSortMode(context: vscode.ExtensionContext, sortMode: CustomSortMode): Promise<void> {
-    activeSortMode = sortMode;
-    await context.workspaceState.update(SORT_MODE_KEY, sortMode);
+    if (activeSortMode === sortMode) {
+        activeSortDirection = activeSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        activeSortMode = sortMode;
+        activeSortDirection = 'asc';
+    }
+    await Promise.all([
+        context.workspaceState.update(SORT_MODE_KEY, activeSortMode),
+        context.workspaceState.update(SORT_DIRECTION_KEY, activeSortDirection),
+    ]);
     rebuildTree();
 }
 
