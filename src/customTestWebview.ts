@@ -1778,7 +1778,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             separator.append(
                 twisty,
                 projectStatus,
-                iconSpan('codicon-root', 'kind-icon'),
                 textSpan(label, 'list-separator-label'),
             );
             const rightMeta = document.createElement('div');
@@ -2657,7 +2656,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function kindIconFor(kind) {
-            if (kind === 'module') return 'codicon-root';
             if (kind === 'package') return 'codicon-namespace';
             if (kind === 'class') return 'codicon-class';
             if (kind === 'method' || kind === 'virtualMethod') return 'codicon-method';

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.5] - 2026-08-17
+
+### Improved
+
+- Simplified project rows in Tree and List views by removing the redundant project kind icon while preserving status, navigation, and actions.
+
+---
+
 ## [1.0.4] - 2026-08-17
 
 ### Fixed

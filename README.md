@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -39,7 +39,7 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 - **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
 - **Copy...** — the first context-menu action copies Maven commands, package names, class names (FQCN), full paths, or method names; full paths are also available for projects and packages, and multi-selection is supported
 - **Inline reveal** — editor test actions reveal and focus the matching item in the dedicated Maven Test Explorer view
-- **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, `$(symbol-namespace)` for packages
+- **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, and `$(symbol-namespace)` for packages; project rows stay compact without a redundant kind icon
 - **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
 - **JUnit `@Tag` filtering** — class and method tags are available from the custom filter input with project-scoped names such as `@javatest.smoke`; suggestions include contextual match counts, and method-level filters include inherited class tags
 - **Inherited-test navigation** — inherited interface methods show their origin and provide separate context-menu actions to open the test declaration or concrete implementation class
