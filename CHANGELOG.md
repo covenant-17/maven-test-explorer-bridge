@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.4] - 2026-08-17
+
+### Fixed
+
+- Preserved duration and result statistics in narrow test rows by truncating long test names first.
+
+### Internal
+
+- Added a webview layout invariant to prevent row statistics from becoming shrinkable again.
+
+---
+
 ## [1.0.3] - 2026-08-17
 
 ### Improved

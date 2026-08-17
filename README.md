@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.3-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -26,7 +26,7 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 
 - **Auto-discovery** — finds all Maven modules and JUnit 5 test classes in the workspace
 - **Dedicated test tree and list** — switch between hierarchical and flat views with deterministic ordering, project grouping, and native run progress
-- **Responsive large suites** — virtualized rendering keeps projects with thousands of tests fast to expand, scroll, select, and navigate
+- **Responsive large suites** — virtualized rendering keeps projects with thousands of tests fast to expand, scroll, select, and navigate; long names yield space to keep result statistics visible
 - **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
 - **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes), dynamic invocations, and inherited test-interface methods
 - **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported

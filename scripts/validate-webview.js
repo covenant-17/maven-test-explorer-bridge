@@ -17,4 +17,9 @@ if (templateSource.includes('`') || templateSource.includes('${')) {
 const generatedScript = Function(`return \`${templateSource}\`;`)();
 Function(generatedScript);
 
-console.log('[validate-webview] Generated webview JavaScript syntax is valid.');
+const rightMetaRule = source.match(/\.right-meta\s*\{([^}]*)\}/)?.[1] || '';
+if (!/flex:\s*0\s+0\s+auto\s*;/.test(rightMetaRule)) {
+    throw new Error('Row statistics must not shrink behind the test name.');
+}
+
+console.log('[validate-webview] Generated webview JavaScript syntax and layout invariants are valid.');

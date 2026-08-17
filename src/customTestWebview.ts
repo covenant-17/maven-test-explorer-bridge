@@ -687,7 +687,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             opacity: 0.9;
         }
         .right-meta {
-            flex: 0 100 auto;
+            flex: 0 0 auto;
             width: auto;
             max-width: 70%;
             min-width: 0;
