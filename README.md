@@ -6,7 +6,7 @@
 
 > Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.6-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -34,6 +34,7 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 - **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
 - **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
 - **Re-run Failed** — reruns only the classes that failed in the last run
+- **Stop Current Run** — cancels the active Maven run and preserves partial results
 - **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
 - **Flexible sorting** — sort by source location, status, duration, or name with independent ascending and descending directions
 - **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
@@ -68,6 +69,7 @@ This extension fixes that. It discovers Maven tests, watches `target/surefire-re
 | Button | Action |
 |--------|--------|
 | ▶ | Run All — runs every discovered test through Maven |
+| ■ | Stop — appears during a run and cancels the active Maven process |
 | ↺ | Refresh — rescans Java sources and rebuilds the tree |
 | 🕐 | Run History — pick a past run to restore its results |
 | ⇔ | Expand / Collapse All — opens or closes the visible hierarchy |
@@ -85,6 +87,7 @@ All commands are available via **Command Palette** (`Ctrl+Shift+P`):
 |---------|-------------|
 | `Maven: Refresh Tests` | Rescan sources and rebuild the tree |
 | `Maven: Run All Tests` | Run `mvn clean test` for all modules |
+| `Maven: Stop Current Run` | Cancel the active Maven run |
 | `Maven: Re-run Failed Tests` | Rerun only failed classes from the last run |
 | `Maven: Clean Test Reports` | Delete `target/surefire-reports` and `target/failsafe-reports` |
 | `Maven: Clear Test Results` | Reset all result icons to neutral |

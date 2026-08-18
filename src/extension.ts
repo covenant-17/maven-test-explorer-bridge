@@ -27,6 +27,7 @@ import {
     CMD_REFRESH_TESTS,
     CMD_RERUN_FAILED,
     CMD_RUN_ALL_TESTS,
+    CMD_STOP_RUN,
     CMD_SHOW_HISTORY,
     CMD_SORT_BY_DURATION,
     CMD_SORT_BY_DURATION_ASC,
@@ -92,11 +93,13 @@ let activeSortDirection: CustomSortDirection = 'asc';
 let activeViewMode: 'tree' | 'list' = 'tree';
 let selectedNodeId: string | undefined;
 let running = false;
+let activeCancellationSource: vscode.CancellationTokenSource | undefined;
 let runtimeRunningNodeIds = new Set<string>();
 let runtimeResultByXmlPath = new Map<string, SuiteResult>();
 let runStartedAt: number | undefined;
 let lastRunDurationMs: number | undefined;
 let lastRunResults: SuiteResult[] = [];
+let lastRunCancelled = false;
 let totalRunClasses = 0;
 const currentRunClasses = new Set<string>();
 const completedRunClasses = new Set<string>();
@@ -124,6 +127,7 @@ let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.running', false);
     context.subscriptions.push(outputChannel);
     outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
 
@@ -150,6 +154,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     provider = new CustomTestWebviewProvider(context.extensionUri, {
         refresh: () => refresh(context, true),
         runAll: () => runAll(context),
+        stopRun: () => stopRun(),
         rerunFailed: () => rerunFailed(context),
         clearResults: () => clearResults(context, false),
         clearResultsAndHistory: () => clearResults(context, true),
@@ -187,7 +192,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-    // VS Code disposes subscriptions automatically.
+    activeCancellationSource?.cancel();
+    activeCancellationSource?.dispose();
+    activeCancellationSource = undefined;
 }
 
 async function refresh(context: vscode.ExtensionContext, showMessage: boolean): Promise<void> {
@@ -260,6 +267,7 @@ function rebuildTree(): void {
         `${activeSortMode}${activeSortDirection === 'asc' ? 'Asc' : 'Desc'}`,
     );
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.viewMode', activeViewMode);
+    void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.running', running);
     syncInlineResults();
 }
 
@@ -581,6 +589,9 @@ async function runTargets(
     targets: readonly RunTarget[],
     historyLabel: string,
 ): Promise<void> {
+    if (running) {
+        return;
+    }
     const executionTargets = targets.map((target) => ({
         ...target,
         expectedTestCount: target.expectedTestCount ?? expectedTestCount(target.runningNodeIds ?? []),
@@ -598,12 +609,15 @@ async function runTargets(
     runStartedAt = Date.now();
     lastRunDurationMs = undefined;
     lastRunResults = [];
+    lastRunCancelled = false;
     currentRunClasses.clear();
     completedRunClasses.clear();
     totalRunClasses = expectedClassCount(runtimeRunningNodeIds);
     rebuildTree();
 
     const cancellationSource = new vscode.CancellationTokenSource();
+    activeCancellationSource = cancellationSource;
+    let cancelled = false;
     const allResults: SuiteResult[] = [];
     const fullRunModuleDirs = new Set<string>();
     const inlineItems = inlineItemsForTargets(executionTargets);
@@ -661,12 +675,14 @@ async function runTargets(
                     },
                 );
                 poller.flush();
-                if (!result.cancelled) {
-                    const suiteResults = addSkippedResultsForLifecycleFailures(
-                        readAllReports(target.module.moduleDir, settings.reportGlobs),
-                        target.runningNodeIds ?? [],
-                    );
-                    allResults.push(...suiteResults);
+                cancelled = cancelled || result.cancelled;
+                const reportedResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
+                const suiteResults = result.cancelled
+                    ? reportedResults
+                    : addSkippedResultsForLifecycleFailures(reportedResults, target.runningNodeIds ?? []);
+                allResults.push(...suiteResults);
+                if (result.cancelled) {
+                    break;
                 }
             } finally {
                 poller.dispose();
@@ -678,7 +694,7 @@ async function runTargets(
             updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
             if (settings.runHistoryEnabled) {
-                saveRunToHistory(context, allResults, historyLabel);
+                saveRunToHistory(context, allResults, historyLabel, cancelled ? 'cancelled' : 'completed');
             }
             if (allResults.length > 0) {
                 publishResults(
@@ -696,14 +712,25 @@ async function runTargets(
             inlineRun.end();
             lastRunDurationMs = runStartedAt === undefined ? undefined : Date.now() - runStartedAt;
             lastRunResults = [...allResults];
+            lastRunCancelled = cancelled;
             running = false;
             runStartedAt = undefined;
             currentRunClasses.clear();
             runtimeRunningNodeIds = new Set();
             runtimeResultByXmlPath = new Map();
+            activeCancellationSource?.dispose();
+            activeCancellationSource = undefined;
             rebuildTree();
         }
     }
+}
+
+function stopRun(): void {
+    if (!running || !activeCancellationSource) {
+        return;
+    }
+    outputChannel.appendLine('[Runner] Stop requested by user.');
+    activeCancellationSource.cancel();
 }
 
 function expectedTestCount(runningNodeIds: readonly string[]): number {
@@ -753,6 +780,7 @@ function buildWebviewRunSummary(): WebviewRunSummary {
         runDurationMs: running ? undefined : (lastRunDurationMs ?? fallbackRunDuration),
         testDurationMs: timing.testDurationMs,
         fixtureDurationMs: timing.fixtureDurationMs,
+        cancelled: !running && lastRunCancelled,
     };
 }
 
@@ -955,6 +983,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(CMD_REFRESH_TESTS, () => refresh(context, true)),
         vscode.commands.registerCommand(CMD_RUN_ALL_TESTS, () => runAll(context)),
+        vscode.commands.registerCommand(CMD_STOP_RUN, () => stopRun()),
         vscode.commands.registerCommand(CMD_EXPAND_ALL, () => setAllExpanded(context, true)),
         vscode.commands.registerCommand(CMD_COLLAPSE_ALL, () => setAllExpanded(context, false)),
         vscode.commands.registerCommand(CMD_SORT_BY_LOCATION, () => setSortMode(context, 'location')),
@@ -1141,6 +1170,7 @@ async function clearResults(context: vscode.ExtensionContext, withHistory: boole
     lastFailedClassNames.clear();
     lastRunResults = [];
     lastRunDurationMs = undefined;
+    lastRunCancelled = false;
     totalRunClasses = 0;
     completedRunClasses.clear();
     await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
@@ -1172,6 +1202,7 @@ async function showHistory(context: vscode.ExtensionContext): Promise<void> {
     updateResultCache(selected.entry.suiteResults, new Set());
     lastRunResults = [...selected.entry.suiteResults];
     lastRunDurationMs = undefined;
+    lastRunCancelled = selected.entry.outcome === 'cancelled';
     totalRunClasses = new Set(selected.entry.suiteResults.map((suite) => suite.suiteName)).size;
     completedRunClasses.clear();
     updateFailedClasses(selected.entry.suiteResults);
@@ -1431,6 +1462,7 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
             if (!running) {
                 lastRunResults = [];
                 lastRunDurationMs = undefined;
+                lastRunCancelled = false;
             }
             updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
@@ -1482,6 +1514,7 @@ async function reloadConfiguredReports(context: vscode.ExtensionContext): Promis
     updateResultCache(results, new Set());
     lastRunResults = [];
     lastRunDurationMs = undefined;
+    lastRunCancelled = false;
     updateFailedClasses(results);
     await saveResultCache(context);
     rebuildTree();

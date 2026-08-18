@@ -22,6 +22,7 @@ export const CONFIG_PREFER_MAVEN_WRAPPER = 'preferMavenWrapper';
 // Command IDs
 export const CMD_REFRESH_TESTS = 'mavenTestExplorer.refreshTests';
 export const CMD_RUN_ALL_TESTS = 'mavenTestExplorer.runAllTests';
+export const CMD_STOP_RUN = 'mavenTestExplorer.stopRun';
 export const CMD_EXPAND_ALL = 'mavenTestExplorer.expandAll';
 export const CMD_COLLAPSE_ALL = 'mavenTestExplorer.collapseAll';
 export const CMD_SORT_BY_LOCATION = 'mavenTestExplorer.sortByLocation';

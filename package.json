@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -41,6 +41,12 @@
         "title": "Maven: Run All Tests",
         "category": "Maven Test Explorer",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "mavenTestExplorer.stopRun",
+        "title": "Maven: Stop Current Run",
+        "category": "Maven Test Explorer",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "mavenTestExplorer.expandAll",
@@ -215,6 +221,11 @@
           "command": "mavenTestExplorer.runAllTests",
           "group": "navigation@1",
           "when": "view == mavenTestExplorer.view"
+        },
+        {
+          "command": "mavenTestExplorer.stopRun",
+          "group": "navigation@1.5",
+          "when": "view == mavenTestExplorer.view && mavenTestExplorer.running"
         },
         {
           "command": "mavenTestExplorer.expandAll",

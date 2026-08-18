@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.6] - 2026-08-18
+
+### Added
+
+- Added Stop Current Run controls to the explorer toolbar and run statistics row.
+- Preserved partial results and recorded cancelled runs in Run History.
+
+---
+
 ## [1.0.5] - 2026-08-17
 
 ### Improved

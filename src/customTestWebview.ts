@@ -17,6 +17,7 @@ export interface WebviewRunSummary {
     readonly runDurationMs?: number;
     readonly testDurationMs?: number;
     readonly fixtureDurationMs?: number;
+    readonly cancelled?: boolean;
 }
 
 export interface WebviewState {
@@ -43,6 +44,7 @@ export interface WebviewState {
 export interface WebviewHandlers {
     refresh(): void | Promise<void>;
     runAll(): void | Promise<void>;
+    stopRun(): void | Promise<void>;
     rerunFailed(): void | Promise<void>;
     clearResults(): void | Promise<void>;
     clearResultsAndHistory(): void | Promise<void>;
@@ -125,6 +127,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'runAll':
                 await this.handlers.runAll();
+                break;
+            case 'stopRun':
+                await this.handlers.stopRun();
                 break;
             case 'rerunFailed':
                 await this.handlers.rerunFailed();
@@ -357,6 +362,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .codicon-history::before { content: "\\ea82"; }
         .codicon-refresh::before { content: "\\eb37"; }
         .codicon-run::before { content: "\\eb2c"; }
+        .codicon-debug-stop::before { content: "\\eb4d"; }
         .codicon-close::before { content: "\\ea76"; }
         .codicon-more::before { content: "\\eab4"; }
         .codicon-passed::before { content: "\\eab2"; }
@@ -1335,7 +1341,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             summaryElapsedTimer = undefined;
             const stats = state.stats || {};
             const total = stats.total || 0;
-            const hasResults = state.running || total > 0;
+            const hasResults = state.running || total > 0 || Boolean(state.runSummary?.cancelled);
             summaryEl.hidden = !hasResults;
             summaryEl.textContent = '';
             if (!hasResults) {
@@ -1391,6 +1397,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
             const rerunButton = rowAction('codicon-refresh', 'Re-run Failed Tests', () => post('rerunFailed'));
             right.appendChild(withInternalTooltip(rerunButton, 'rerun-failed', 'Re-run Failed Tests'));
+            if (state.running) {
+                const stopButton = rowAction('codicon-debug-stop', 'Stop Current Run', () => post('stopRun'));
+                right.appendChild(withInternalTooltip(stopButton, 'stop-run', 'Stop Current Run'));
+            }
             summaryEl.append(left, right);
         }
 

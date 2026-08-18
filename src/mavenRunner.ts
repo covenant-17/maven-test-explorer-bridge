@@ -53,6 +53,16 @@ export function runMaven(
         let runningFailed = 0;
         let runningSkipped = 0;
         let stdoutBuf = '';
+        let cancellationRequested = false;
+        let settled = false;
+
+        const finish = (result: MavenRunResult): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve(result);
+        };
 
         proc.stdout.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
@@ -101,9 +111,12 @@ export function runMaven(
         });
 
         const cancellationSubscription = token.onCancellationRequested(() => {
+            if (cancellationRequested) {
+                return;
+            }
+            cancellationRequested = true;
             outputChannel.appendLine('[Maven] Run cancelled by user.');
             killProcessTree(proc, outputChannel);
-            resolve({ exitCode: -1, cancelled: true });
         });
 
         proc.on('close', (code) => {
@@ -111,13 +124,13 @@ export function runMaven(
             const exitCode = code ?? -1;
             outputChannel.appendLine('');
             outputChannel.appendLine(`[Maven] Exited with code ${exitCode}`);
-            resolve({ exitCode, cancelled: false });
+            finish({ exitCode, cancelled: cancellationRequested });
         });
 
         proc.on('error', (err) => {
             cancellationSubscription.dispose();
             outputChannel.appendLine(`[Maven] Process error: ${err.message}`);
-            resolve({ exitCode: -1, cancelled: false });
+            finish({ exitCode: -1, cancelled: cancellationRequested });
         });
     });
 }

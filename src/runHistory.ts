@@ -10,6 +10,7 @@ export interface RunHistoryEntry {
     readonly timestamp: number;
     readonly source: string;
     readonly suiteResults: readonly SuiteResult[];
+    readonly outcome?: 'completed' | 'cancelled';
 }
 
 interface RunStats {
@@ -35,15 +36,16 @@ function computeStats(suiteResults: readonly SuiteResult[]): RunStats {
 }
 
 /**
- * Saves a completed test run to workspace-scoped history.
- * Silently skips empty result sets.
+ * Saves a test run to workspace-scoped history.
+ * Completed runs with no results are skipped; cancelled runs are retained.
  */
 export function saveRunToHistory(
     context: vscode.ExtensionContext,
     suiteResults: readonly SuiteResult[],
     source: string,
+    outcome: 'completed' | 'cancelled' = 'completed',
 ): void {
-    if (suiteResults.length === 0) {
+    if (suiteResults.length === 0 && outcome !== 'cancelled') {
         return;
     }
 
@@ -58,9 +60,10 @@ export function saveRunToHistory(
     if (stats.errors  > 0) { parts.push(`${stats.errors} errors`);  }
     if (stats.skipped > 0) { parts.push(`${stats.skipped} skipped`); }
 
-    const label = `${dateStr}  —  ${total} tests: ${parts.join(', ')}`;
+    const status = outcome === 'cancelled' ? 'Cancelled  —  ' : '';
+    const label = `${status}${dateStr}  —  ${total} tests${parts.length > 0 ? `: ${parts.join(', ')}` : ''}`;
 
-    const entry: RunHistoryEntry = { id: `run-${timestamp}`, label, timestamp, source, suiteResults };
+    const entry: RunHistoryEntry = { id: `run-${timestamp}`, label, timestamp, source, suiteResults, outcome };
     const history = loadHistory(context);
     const updated = [entry, ...history].slice(0, readSettings().maxHistoryEntries);
     context.workspaceState.update(HISTORY_STATE_KEY, updated);
