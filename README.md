@@ -4,178 +4,224 @@
 
 # Maven Test Explorer Bridge
 
-> Bridge between **Maven/Surefire** and the **VS Code Testing sidebar** — no Microsoft Java Test Runner required.
+> Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.6-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.7-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
 
----
-
-## Why?
-
-When tests are run via **Maven** (from a terminal, a CI pipeline, or an AI agent like Claude Code), the VS Code Testing sidebar stays silent — it simply doesn't know what happened.
-
-This extension fixes that. It discovers Maven tests, watches `target/surefire-reports/TEST-*.xml`, and renders the results in its dedicated Maven Test Explorer view in the Testing sidebar.
-
-**Maven runs the tests. VS Code shows the results. That's it.**
-
----
+Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Maven runs on demand, watches XML reports produced by Maven Surefire and Failsafe, and renders the combined state in its own **Maven Test Explorer** view. Tests started from a terminal, CI task, or coding agent are picked up through the same report-watching flow.
 
 ## Features
 
-- **Auto-discovery** — finds all Maven modules and JUnit 5 test classes in the workspace
-- **Dedicated test tree and list** — switch between hierarchical and flat views with deterministic ordering, project grouping, and native run progress
-- **Responsive large suites** — virtualized rendering keeps projects with thousands of tests fast to expand, scroll, select, and navigate; long names yield space to keep result statistics visible
-- **Live sync** — detects Surefire/Failsafe XML changes and updates the sidebar without any manual action
-- **Full JUnit 5 support** — `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@Nested` (including deeply nested classes), dynamic invocations, and inherited test-interface methods
-- **Run from UI** — run all tests, a single class, or a single method via Maven directly from Test Explorer; multi-selection supported
-- **Aggregate stats** — the header and expandable nodes show compact passed, failed, errored, skipped, and total counts at a glance
-- **Run History** — last 20 runs stored per workspace; restore any previous result set with one click
-- **Clear Results** — wipes all pass/fail colours and returns the tree to a neutral state
-- **Re-run Failed** — reruns only the classes that failed in the last run
-- **Stop Current Run** — cancels the active Maven run and preserves partial results
-- **Multi-filter input** — type `@` to select project-scoped JUnit tags, combine filters with comma / `AND` / `&&`, or use `OR` / `||` for alternatives
-- **Flexible sorting** — sort by source location, status, duration, or name with independent ascending and descending directions
-- **Annotation filters** — string-valued test annotations are searchable alongside JUnit tags, result states, and text terms
-- **Copy...** — the first context-menu action copies Maven commands, package names, class names (FQCN), full paths, or method names; full paths are also available for projects and packages, and multi-selection is supported
-- **Inline reveal** — editor test actions reveal and focus the matching item in the dedicated Maven Test Explorer view
-- **Codicon icons** — test tree uses native VS Code icons: `$(symbol-method)` for methods, `$(symbol-class)` for classes, and `$(symbol-namespace)` for packages; project rows stay compact without a redundant kind icon
-- **`@BeforeAll` / lifecycle errors** — when a `@BeforeAll` method throws before any test runs, a dedicated `@BeforeAll` node appears in the sidebar with the full error message and stack trace pinned to the annotation line in the source file
-- **JUnit `@Tag` filtering** — class and method tags are available from the custom filter input with project-scoped names such as `@javatest.smoke`; suggestions include contextual match counts, and method-level filters include inherited class tags
-- **Inherited-test navigation** — inherited interface methods show their origin and provide separate context-menu actions to open the test declaration or concrete implementation class
-
----
+- **Dedicated Tree and List views** — browse deterministic project, package, class, method, dynamic-invocation, and lifecycle nodes.
+- **Multi-module and multi-root discovery** — locate Maven modules from `pom.xml` files across the open workspace.
+- **JUnit 5 source discovery** — recognize `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, nested classes, and inherited test-interface methods.
+- **Surefire and Failsafe result mapping** — show passed, failed, errored, skipped, and total counts while retaining source navigation and error details.
+- **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
+- **Run from the UI** — run the workspace, a project, package, class, method, or a grouped multi-selection through Maven.
+- **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
+- **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
+- **Run History** — store and restore recent result sets per workspace; retention is configurable from 1 to 100 entries.
+- **Re-run Failed** — rerun classes represented by the current failed or errored results.
+- **Flexible filtering** — combine text, status, JUnit tag, and string-annotation terms with AND/OR expressions.
+- **Maven/JUnit selector search** — paste `Class#method` or `fully.qualified.Class#method` to find a specific test method.
+- **Flexible sorting** — sort by source location, name, status, or duration in ascending or descending order.
+- **Configurable rows** — independently choose visible Tree/List row parts and metadata while retaining the required expander.
+- **Context actions and multi-selection** — run selected nodes or copy Maven commands, packages, FQCNs, paths, and method names.
+- **Source navigation** — open discovered methods, lifecycle errors, inherited declarations, or concrete implementation classes.
+- **Inline Testing API bridge** — keep editor gutter runs, result messages, error peek, and reveal actions connected to the custom explorer.
 
 ## Requirements
 
 - VS Code `^1.84.0`
-- Java project with `pom.xml`
-- Maven available on `PATH` (or configured via `mavenTestExplorer.mavenExecutable`)
-- JUnit 5 + Maven Surefire Plugin
-
----
+- A workspace containing at least one `pom.xml`
+- JUnit 5 tests in Java source files matched by `mavenTestExplorer.testSourceGlobs`
+- Maven Wrapper (`mvnw` / `mvnw.cmd`) in the module or its parent, or Maven available through `mavenTestExplorer.mavenExecutable`
+- Maven Surefire or Failsafe XML reports for result synchronization
 
 ## Getting Started
 
-1. Open a workspace containing a `pom.xml`
-2. The extension activates automatically and builds the test tree
-3. Run `mvn clean test` from any terminal — the sidebar updates on its own
+1. Install the extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge).
+2. Open a folder or multi-root workspace containing one or more `pom.xml` files.
+3. Open the Testing sidebar and expand **Maven Test Explorer**.
+4. Use **Run All** or a row action to start Maven, or run the project's wrapper/Maven command in a terminal.
+5. The explorer updates when matching Surefire/Failsafe `TEST-*.xml` files are written.
 
----
+By default the extension prefers the Maven Wrapper and falls back to `mvn`. Change the executable, goals, profiles, arguments, source globs, or report globs when the project uses a different layout.
 
-## Toolbar Buttons
+## Using the Explorer
+
+### Toolbar
 
 | Button | Action |
-|--------|--------|
-| ▶ | Run All — runs every discovered test through Maven |
-| ■ | Stop — appears during a run and cancels the active Maven process |
-| ↺ | Refresh — rescans Java sources and rebuilds the tree |
-| 🕐 | Run History — pick a past run to restore its results |
-| ⇔ | Expand / Collapse All — opens or closes the visible hierarchy |
-| 🗑 | Clear — clear results, or clear results and history |
-| ≡ | Sort — order tests by location, status, duration, or name |
-| ☷ | View Mode — switch between tree and flat list views |
+|---|---|
+| ▶ | Run all discovered Maven modules |
+| ■ | Stop the active run; visible only while Maven is running |
+| ↺ | Rescan modules and Java test sources |
+| 🕐 | Open Run History and restore a previous result set |
+| ⇔ | Expand or collapse the visible hierarchy |
+| 🗑 | Clear results, or clear results and history |
+| ≡ | Sort by location, name, status, or duration |
+| ☷ | Switch between Tree and flat List views |
 
----
+### Selection and navigation
+
+- Click a row to select it; use `Ctrl+Click` / `Cmd+Click` to toggle items and `Shift+Click` to select a range.
+- A parent and its selected descendants are deduplicated before Maven targets are generated.
+- Double-click a source-backed row or press `Enter` to open its Java declaration.
+- Press `Space` to run the focused row. Use the context-menu key or `Shift+F10` for row actions.
+- Right-click a multi-selection to run it as a group or open **Copy...** actions.
+
+### Filter syntax
+
+The filter retains matching ancestors so that results remain navigable. Type `@` to open contextual suggestions with match counts.
+
+| Goal | Example |
+|---|---|
+| Text, class, package, or method search | `AudiencesBotsAddBotTest` |
+| Maven/JUnit class-method selector | `AudiencesBotsAddBotTest#shouldAddBotByUsername` |
+| Project-scoped JUnit tag | `@javatest.smoke` |
+| Status | `@failed`, `@error`, `@skipped`, or `@executed` |
+| Annotation name | `@javatest.annotation.knownissue` |
+| Annotation value contains text | `@javatest.annotation.knownissue=TEST-4` |
+| Annotation value equals text | `@javatest.annotation.knownissue="TEST-401"` |
+| All terms | `@javatest.smoke AND @failed` or `@javatest.smoke, @failed` |
+| Alternative terms | `@failed OR @skipped` |
+| Grouped expression | `@executed AND (@failed OR @skipped)` |
+
+`AND` and `&&` are equivalent; comma is also AND. `OR` and `||` are equivalent. Operators are case-insensitive, AND binds more tightly than OR, and parentheses can make precedence explicit. Project namespaces are derived from the Maven module directory name and are shown by suggestions.
 
 ## Commands
 
-All commands are available via **Command Palette** (`Ctrl+Shift+P`):
+The following user-facing commands are registered. Toolbar-only sort, view, expand/collapse, and inline-reveal commands are intentionally omitted from the Command Palette.
 
-| Command | Description |
-|---------|-------------|
-| `Maven: Refresh Tests` | Rescan sources and rebuild the tree |
-| `Maven: Run All Tests` | Run `mvn clean test` for all modules |
-| `Maven: Stop Current Run` | Cancel the active Maven run |
-| `Maven: Re-run Failed Tests` | Rerun only failed classes from the last run |
-| `Maven: Clean Test Reports` | Delete `target/surefire-reports` and `target/failsafe-reports` |
-| `Maven: Clear Test Results` | Reset all result icons to neutral |
-| `Maven: Show Run History` | Browse and restore past runs |
+| Command title | Description |
+|---|---|
+| `Maven: Refresh Tests` | Rescan Maven modules and Java test sources |
+| `Maven: Run All Tests` | Run the configured all-tests goals in every discovered module |
+| `Maven: Stop Current Run` | Cancel the active Maven process tree |
+| `Maven: Re-run Failed Tests` | Rerun classes represented by failed or errored results |
+| `Maven: Clean Test Reports` | Delete matching `TEST-*.xml` report files |
+| `Clear Test Results` | Reset current results while preserving history |
+| `Clear Results & History` | Reset current results and delete stored run history |
+| `Maven: Show Run History` | Browse and restore stored result sets |
+| `Configure Tree Visible Parts...` | Choose parts and metadata displayed in Tree rows |
+| `Configure List Visible Parts...` | Choose parts and metadata displayed in List rows |
 
----
+VS Code may prefix these titles with the **Maven Test Explorer** command category.
 
 ## Configuration
 
-```jsonc
-{
-  // Path to Maven executable
-  "mavenTestExplorer.mavenExecutable": "mvn",
+### Test Discovery
 
-  // Maven goals to execute
-  "mavenTestExplorer.defaultCommand": "clean test",
+| Setting | Default | Purpose |
+|---|---|---|
+| `mavenTestExplorer.mavenExecutable` | `"mvn"` | Executable used when a wrapper is disabled or not found |
+| `mavenTestExplorer.preferMavenWrapper` | `true` | Prefer `mvnw` / `mvnw.cmd` from the module or its immediate parent |
+| `mavenTestExplorer.testSourceGlobs` | `["**/src/test/java/**/*.java"]` | Java source patterns used for discovery and file watching |
+| `mavenTestExplorer.autoRefreshOnSave` | `true` | Rediscover tests when a matching source file changes |
+| `mavenTestExplorer.autoRefreshDebounceMs` | `500` | Delay source rediscovery by 100–5000 ms after changes |
 
-  // Maven profiles to activate
-  "mavenTestExplorer.defaultProfiles": [],
+### Test Execution
 
-  // Extra arguments appended to every Maven command
-  "mavenTestExplorer.additionalArgs": "",
+| Setting | Default | Purpose |
+|---|---|---|
+| `mavenTestExplorer.defaultCommand` | `"clean test"` | Goals used by Run All |
+| `mavenTestExplorer.defaultProfiles` | `[]` | Profiles added to every Maven invocation |
+| `mavenTestExplorer.additionalArgs` | `""` | Extra arguments added to every Maven invocation |
+| `mavenTestExplorer.clearReportsBeforeRun` | `true` | Remove old matching XML reports before an extension-started run |
+| `mavenTestExplorer.testClassCommandTemplate` | `"{maven} {profiles} {args} -Dtest={className} test"` | Template for class, method, grouped, and failed-test runs |
 
-  // Glob patterns for report files
-  "mavenTestExplorer.reportGlobs": [
-    "**/target/surefire-reports/TEST-*.xml",
-    "**/target/failsafe-reports/TEST-*.xml"
-  ],
+The class command template supports `{maven}`, `{profiles}`, `{args}`, `{className}`, and `{methodName}` placeholders. The default grouped selector is passed through `{className}`.
 
-  // Watch report files and auto-refresh
-  "mavenTestExplorer.watchReports": true,
+### Results and Display
 
-  // Delete old reports before each run to avoid stale results
-  "mavenTestExplorer.clearReportsBeforeRun": true,
+| Setting | Default | Purpose |
+|---|---|---|
+| `mavenTestExplorer.showOutputChannel` | `true` | Reveal Maven output when an extension-started run begins |
+| `mavenTestExplorer.reportGlobs` | Surefire and Failsafe `TEST-*.xml` globs | Locate reports for loading, watching, and cleanup |
+| `mavenTestExplorer.watchReports` | `true` | Apply report changes produced outside the extension |
+| `mavenTestExplorer.rowLayout` | All supported parts and metadata | Configure Tree/List status, kind, name, metadata, duration, and statistics |
 
-  // Show the output channel when a run starts
-  "mavenTestExplorer.showOutputChannel": true
-}
-```
+Use the Row Layout setting links or the two **Configure ... Visible Parts** commands for compact multi-select pickers. The expander is always retained. Metadata can independently show the original name hidden by `@DisplayName`, tags, inherited sources, List-view class context, and virtual-test hints.
 
-Use the links in the extension's dedicated `Row Layout` settings group or run `Maven Test Explorer: Configure Tree Visible Parts...` and `Maven Test Explorer: Configure List Visible Parts...` to select row parts in compact multi-select menus. The choices are shared across workspaces and persist between VS Code sessions.
+When horizontal space is limited, metadata is truncated first, followed by duration and the test name. Expanders, status/kind icons, and aggregate statistics are preserved longest.
 
-The expander is always visible because collapsing and expanding nodes is part of the explorer's navigation behavior; all other row parts are optional.
-Metadata can be expanded inside the picker and configured separately for original Java names hidden by `@DisplayName`, tags, inherited sources, flat-list class context, and virtual-test hints.
+### Run History
 
-When horizontal space is limited, row metadata is truncated first, followed by duration and then the test name. Expanders, status and kind icons, and aggregate statistics are preserved longest.
-
----
+| Setting | Default | Purpose |
+|---|---|---|
+| `mavenTestExplorer.runHistoryEnabled` | `true` | Save newly completed or cancelled runs in workspace storage |
+| `mavenTestExplorer.maxHistoryEntries` | `20` | Keep the newest 1–100 history entries |
 
 ## How It Works
 
-```
-mvn clean test
-      │
-      ▼
-target/surefire-reports/TEST-*.xml
-      │
-      ▼  (FileSystemWatcher, 500ms debounce)
- surefireParser
-      │
-      ▼
- resultPublisher  ──►  Custom Maven Test Explorer
-      │
-      ▼
- Test Explorer sidebar updated
+```text
+pom.xml + configured Java source globs
+                 │
+                 ▼
+ Maven module detector + Java source scanner
+                 │
+                 ▼
+        Custom test model ───────────────► Maven Test Explorer webview
+                 ▲                                  │
+                 │                                  └─ run/copy/open/filter actions
+                 │
+ Surefire/Failsafe TEST-*.xml ◄────────── Maven or Maven Wrapper
+                 │
+                 ▼
+        XML parser + result cache ───────► inline Testing API results/error peek
+                 │
+                 └───────────────────────► workspace-scoped Run History
 ```
 
-For AI-agent workflows (Claude Code, etc.) the flow is identical — the agent runs Maven, the extension picks up the results.
+The custom webview is the primary explorer UI. The native VS Code Testing API is retained as a minimal bridge for editor gutter actions, scoped inline runs, result messages, error peek, and reveal-in-custom-explorer behavior.
 
----
+## Troubleshooting
+
+- **No Maven modules:** confirm that the open workspace contains `pom.xml` and that it is not under `target/`.
+- **No discovered tests:** check `mavenTestExplorer.testSourceGlobs`; discovery reads Java sources and does not use compiled test metadata.
+- **Maven does not start:** check the Maven Test Explorer output channel, wrapper location, and `mavenTestExplorer.mavenExecutable`.
+- **No or stale results:** verify `mavenTestExplorer.reportGlobs`, `watchReports`, and the actual Surefire/Failsafe output paths. Use **Maven: Clean Test Reports** when necessary.
+- **A custom selector fails:** adapt `mavenTestExplorer.testClassCommandTemplate` to the test plugin's selector syntax.
+- **A row is missing after filtering:** clear the filter with `Escape` or the filter clear button, then refresh discovery.
+
+## Development
+
+```powershell
+npm ci
+npm run compile
+npm run package
+npx @vscode/vsce ls
+```
+
+- `npm run compile` performs strict TypeScript checking, validates generated webview JavaScript/layout invariants, and creates a development bundle.
+- `npm run package` repeats the checks and creates the production bundle in `dist/extension.js`.
+- `npx @vscode/vsce ls` shows the files that will be included in the extension package.
+
+The repository currently has no unit or integration test suite; compile/package validation does not replace an Extension Development Host smoke test for visual or interaction changes.
 
 ## Project Structure
 
-```
+```text
 src/
-├── constants.ts           # All string literals and config keys
-├── settings.ts            # Typed settings wrapper
-├── mavenProjectDetector.ts # Finds pom.xml, extracts artifactId
-├── javaTestScanner.ts     # Scans Java sources, detects @Test / @Nested
-├── inlineTestBridge.ts    # Minimal Testing API bridge for editor gutter and results
-├── surefireParser.ts      # Parses TEST-*.xml via fast-xml-parser
-├── resultPublisher.ts     # Maps Surefire results onto discovered tests
-├── mavenRunner.ts         # Spawns Maven process
-├── runHistory.ts          # Workspace-scoped run history
-└── extension.ts           # Entry point, command registration
+├── extension.ts             # Activation, commands, discovery/watchers, execution, state
+├── customTestModel.ts       # Custom hierarchy, filtering, sorting, runtime aggregation
+├── customTestWebview.ts     # Dedicated explorer HTML, styling, rendering, interactions
+├── inlineTestBridge.ts      # Minimal native Testing API/editor bridge
+├── javaTestScanner.ts       # Java source discovery and inherited test contracts
+├── mavenProjectDetector.ts  # pom.xml discovery and module metadata
+├── mavenRunner.ts           # Maven argument generation, process output, cancellation
+├── surefireParser.ts        # Surefire/Failsafe TEST-*.xml parsing
+├── resultPublisher.ts       # Result mapping, messages, stack frames, inline output
+├── filterExpression.ts      # AND/OR filter tokenizer and parser
+├── rowVisibility.ts         # Configurable Tree/List row parts and metadata
+├── runHistory.ts            # Workspace-scoped result history
+├── settings.ts              # Typed configuration reader
+└── constants.ts             # Command, setting, and glob identifiers
 ```
-
----
 
 ## License
 

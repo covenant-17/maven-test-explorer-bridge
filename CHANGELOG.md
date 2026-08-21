@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.7] - 2026-08-21
+
+### Added
+
+- Added direct `Class#method` and fully-qualified `Class#method` search in the custom explorer filter.
+
+### Documentation
+
+- Refreshed the README with current commands, settings, filter syntax, architecture, troubleshooting, and development validation.
+
+---
+
 ## [1.0.6] - 2026-08-18
 
 ### Added

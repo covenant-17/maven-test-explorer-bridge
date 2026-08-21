@@ -455,6 +455,7 @@ function matchesTerm(node: CustomTestNode, rawTerm: string): boolean {
         node.fqcn ?? '',
         node.className ?? '',
         node.methodName ?? '',
+        node.fqcn && node.methodName ? `${node.fqcn}#${node.methodName}` : '',
         ...node.tags,
         ...node.annotations,
     ].some((value) => value.toLocaleLowerCase().includes(needle));
