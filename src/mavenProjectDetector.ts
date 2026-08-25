@@ -1,17 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { XMLParser } from 'fast-xml-parser';
 import { POM_GLOB } from './constants';
+import { MavenModule, moduleKeyForDir, parseMavenPom } from './mavenModule';
 
-export interface MavenModule {
-    readonly pomPath: string;
-    readonly moduleDir: string;
-    readonly artifactId: string;
-}
+export { MavenModule } from './mavenModule';
 
 const TARGET_SEGMENT = `${path.sep}target${path.sep}`;
-const POM_PARSER = new XMLParser({ ignoreAttributes: false, trimValues: true });
 
 /**
  * Finds all Maven modules in the given workspace folder by locating pom.xml files.
@@ -32,9 +27,20 @@ export async function findMavenModules(workspaceFolder: vscode.WorkspaceFolder):
         }
 
         const moduleDir = path.dirname(pomPath);
-        const artifactId = extractArtifactId(pomPath) ?? path.basename(moduleDir);
+        const descriptor = extractPomDescriptor(pomPath);
+        const artifactId = descriptor.artifactId ?? path.basename(moduleDir);
+        const declaredModuleDirs = descriptor.modules.map((modulePath) => {
+            const resolved = path.resolve(moduleDir, modulePath);
+            return path.basename(resolved).toLocaleLowerCase() === 'pom.xml' ? path.dirname(resolved) : resolved;
+        });
 
-        modules.push({ pomPath, moduleDir, artifactId });
+        modules.push({
+            key: moduleKeyForDir(moduleDir),
+            pomPath,
+            moduleDir,
+            artifactId,
+            declaredModuleDirs,
+        });
     }
 
     // Sort: root pom first (shortest path), then alphabetically
@@ -54,14 +60,11 @@ export async function findMavenModules(workspaceFolder: vscode.WorkspaceFolder):
  * Reads the first <artifactId> element from a pom.xml file.
  * Returns undefined if the file cannot be read or the element is not found.
  */
-function extractArtifactId(pomPath: string): string | undefined {
+function extractPomDescriptor(pomPath: string): { artifactId?: string; modules: readonly string[] } {
     try {
         const content = fs.readFileSync(pomPath, 'utf8');
-        const parsed = POM_PARSER.parse(content) as { project?: { artifactId?: unknown } };
-        return typeof parsed.project?.artifactId === 'string'
-            ? parsed.project.artifactId
-            : undefined;
+        return parseMavenPom(content);
     } catch {
-        return undefined;
+        return { modules: [] };
     }
 }

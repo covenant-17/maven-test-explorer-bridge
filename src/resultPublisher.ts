@@ -52,7 +52,7 @@ export function publishResults(
         const invocationCounts = sharedInvocationCounts ?? new Map<string, number>();
         for (const suite of suiteResults) {
             for (const tc of suite.testCases) {
-                const item = reportTestCase(run, inlineBridge, tc, outputChannel, invocationCounts);
+                const item = reportTestCase(run, inlineBridge, suite, tc, outputChannel, invocationCounts);
                 if (item) { resolvedItemIds.add(item.id); }
                 if (tc.synthetic) { continue; }
                 switch (tc.status) {
@@ -85,6 +85,7 @@ export function publishResults(
 function reportTestCase(
     run: vscode.TestRun,
     inlineBridge: InlineTestBridge,
+    suite: SuiteResult,
     tc: TestCaseResult,
     outputChannel: vscode.OutputChannel,
     invocationCounts: Map<string, number>,
@@ -95,7 +96,12 @@ function reportTestCase(
     // For @ParameterizedTest: XML already contains unique names like
     // "greetMultipleNames(String)[1]" — those go through getOrCreateMethodItem
     // as-is and each gets its own dynamic TestItem.
-    const baseKey = `${tc.className}#${tc.methodName}`;
+    const moduleKey = inlineBridge.resolveModuleKey(suite.xmlPath, tc.className);
+    if (!moduleKey) {
+        outputChannel.appendLine(`[Results] NO MODULE: ${tc.className} (${suite.xmlPath})`);
+        return undefined;
+    }
+    const baseKey = `${moduleKey}\0${tc.className}#${tc.methodName}`;
     const count = (invocationCounts.get(baseKey) ?? 0) + 1;
     invocationCounts.set(baseKey, count);
     const effectiveName = count > 1 ? `${tc.methodName}[${count}]` : tc.methodName;
@@ -108,12 +114,12 @@ function reportTestCase(
     //  3. Class item — fallback for class-level/setup errors (e.g. @BeforeAll throwing).
     //     These have a synthetic name: empty, FQCN-like (contains `.`), or
     //     "initializationError". Reporting on the class avoids phantom method items.
-    const staticItem = inlineBridge.findMethodItem(tc.className, effectiveName);
+    const staticItem = inlineBridge.findMethodItem(moduleKey, tc.className, effectiveName);
     let item: vscode.TestItem | undefined;
     if (staticItem) {
         item = staticItem;
     } else {
-        const classIsKnown = inlineBridge.findClassItem(tc.className) !== undefined;
+        const classIsKnown = inlineBridge.findClassItem(moduleKey, tc.className) !== undefined;
         const looksLikeRealMethod = effectiveName.length > 0
             && !effectiveName.includes('.')         // FQCN → class-level error
             && effectiveName !== 'initializationError';
@@ -121,10 +127,10 @@ function reportTestCase(
         if (classIsKnown && !looksLikeRealMethod) {
             // Class-level / setup failure: report on the class item to avoid
             // creating a phantom method entry in the sidebar.
-            item = inlineBridge.findClassItem(tc.className);
+            item = inlineBridge.findClassItem(moduleKey, tc.className);
         } else {
             // Unknown class (concrete subclass) or parameterized/inherited method.
-            item = inlineBridge.getOrCreateMethodItem(tc.className, effectiveName);
+            item = inlineBridge.getOrCreateMethodItem(moduleKey, tc.className, effectiveName);
         }
     }
 

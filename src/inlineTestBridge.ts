@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { MavenModule } from './mavenProjectDetector';
+import { moduleItemId, resolveModuleForResult } from './mavenModule';
 import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
 
 /**
@@ -16,20 +17,21 @@ import { TestClassInfo, MethodInfo, buildFqcn } from './javaTestScanner';
  * $ separator (e.g. "AppTest$WhenNameIsSimple") — the same format used here as IDs.
  *
  * TestItem ID conventions:
- *   Module:        {artifactId}
- *   Package:       {artifactId}/{packageName}
- *   Class:         {artifactId}/{packageName}/{ClassName}          (may include $)
- *   Method:        {artifactId}/{packageName}/{ClassName}#{method}
+ *   Module:        module:{encoded canonical module directory}
+ *   Package:       {moduleId}/{packageName}
+ *   Class:         {moduleId}/{packageName}/{ClassName}          (may include $)
+ *   Method:        {moduleId}/{packageName}/{ClassName}#{method}
  */
 export class InlineTestBridge {
     private readonly controller: vscode.TestController;
 
-    // FQCN (com.example.AppTest$Nested) → TestItem — used by resultPublisher
+    // "moduleKey\0FQCN" → TestItem — used by resultPublisher
     private readonly classItems = new Map<string, vscode.TestItem>();
-    // "FQCN#methodName" → TestItem
+    // "moduleKey\0FQCN#methodName" → TestItem
     private readonly methodItems = new Map<string, vscode.TestItem>();
     // "moduleId/packageName" → TestItem
     private readonly packageItems = new Map<string, vscode.TestItem>();
+    private modules: MavenModule[] = [];
     constructor(controller: vscode.TestController) {
         this.controller = controller;
     }
@@ -38,6 +40,7 @@ export class InlineTestBridge {
         this.classItems.clear();
         this.methodItems.clear();
         this.packageItems.clear();
+        this.modules = modulesWithClasses.map(({ module }) => module);
 
         const moduleItems: vscode.TestItem[] = [];
         for (const { module, classes } of modulesWithClasses) {
@@ -46,12 +49,17 @@ export class InlineTestBridge {
         this.controller.items.replace(moduleItems);
     }
 
-    findClassItem(fqcn: string): vscode.TestItem | undefined {
-        return this.classItems.get(fqcn);
+    resolveModuleKey(xmlPath: string, fqcn: string): string | undefined {
+        const matches = this.modules.filter((module) => this.classItems.has(classMapKey(module.key, fqcn)));
+        return resolveModuleForResult(this.modules, xmlPath, matches.map((module) => module.key))?.key;
     }
 
-    findMethodItem(fqcn: string, methodName: string): vscode.TestItem | undefined {
-        return this.methodItems.get(`${fqcn}#${methodName}`);
+    findClassItem(moduleKey: string, fqcn: string): vscode.TestItem | undefined {
+        return this.classItems.get(classMapKey(moduleKey, fqcn));
+    }
+
+    findMethodItem(moduleKey: string, fqcn: string, methodName: string): vscode.TestItem | undefined {
+        return this.methodItems.get(methodMapKey(moduleKey, fqcn, methodName));
     }
 
     /**
@@ -59,14 +67,14 @@ export class InlineTestBridge {
      * the class item. Used for inherited and @TestFactory dynamic tests that are
      * not present in the static source scan.
      */
-    getOrCreateMethodItem(fqcn: string, methodName: string): vscode.TestItem | undefined {
-        const existing = this.methodItems.get(`${fqcn}#${methodName}`);
+    getOrCreateMethodItem(moduleKey: string, fqcn: string, methodName: string): vscode.TestItem | undefined {
+        const existing = this.methodItems.get(methodMapKey(moduleKey, fqcn, methodName));
         if (existing) {
             return existing;
         }
-        let classItem = this.classItems.get(fqcn);
+        let classItem = this.classItems.get(classMapKey(moduleKey, fqcn));
         if (!classItem) {
-            classItem = this.createDynamicClassItem(fqcn);
+            classItem = this.createDynamicClassItem(moduleKey, fqcn);
         }
         if (!classItem) {
             return undefined;
@@ -88,7 +96,7 @@ export class InlineTestBridge {
                 );
             }
         }
-        this.methodItems.set(`${fqcn}#${methodName}`, methodItem);
+        this.methodItems.set(methodMapKey(moduleKey, fqcn, methodName), methodItem);
         // Append to class children
         const children: vscode.TestItem[] = [];
         classItem.children.forEach((c) => children.push(c));
@@ -102,7 +110,7 @@ export class InlineTestBridge {
      * during static source scan (e.g. concrete subclasses, @TestFactory classes).
      * Locates the parent package item by matching the package name portion of the FQCN.
      */
-    private createDynamicClassItem(fqcn: string): vscode.TestItem | undefined {
+    private createDynamicClassItem(moduleKey: string, fqcn: string): vscode.TestItem | undefined {
         // Strip nested suffix: "com.example.AppTest$Nested" → "com.example.AppTest"
         const baseFqcn = fqcn.includes('$') ? fqcn.substring(0, fqcn.indexOf('$')) : fqcn;
         const dotIdx = baseFqcn.lastIndexOf('.');
@@ -111,10 +119,15 @@ export class InlineTestBridge {
         // Find a matching package item in the existing tree
         let pkgItem: vscode.TestItem | undefined;
         let moduleId: string | undefined;
+        const module = this.modules.find((candidate) => candidate.key === moduleKey);
+        if (!module) {
+            return undefined;
+        }
+        const expectedModuleId = moduleItemId(module);
         for (const [pkgKey, item] of this.packageItems) {
             const slashIdx = pkgKey.indexOf('/');
             const pkgPart = slashIdx >= 0 ? pkgKey.substring(slashIdx + 1) : pkgKey;
-            if (pkgPart === packageName) {
+            if (pkgKey.startsWith(`${expectedModuleId}/`) && pkgPart === packageName) {
                 pkgItem = item;
                 moduleId = slashIdx >= 0 ? pkgKey.substring(0, slashIdx) : pkgKey;
                 break;
@@ -130,7 +143,7 @@ export class InlineTestBridge {
         const simpleName = fqcn.includes('$') ? fqcn.split('$').pop()! : baseFqcn.substring(dotIdx + 1);
 
         const classItem = this.controller.createTestItem(classId, `$(symbol-class) ${simpleName}`);
-        this.classItems.set(fqcn, classItem);
+        this.classItems.set(classMapKey(moduleKey, fqcn), classItem);
 
         // Append to package children
         const pkgChildren: vscode.TestItem[] = [];
@@ -142,17 +155,19 @@ export class InlineTestBridge {
     }
 
     private buildModuleItem(module: MavenModule, classes: readonly TestClassInfo[]): vscode.TestItem {
-        const moduleItem = this.controller.createTestItem(module.artifactId, module.artifactId);
+        const id = moduleItemId(module);
+        const moduleItem = this.controller.createTestItem(id, module.artifactId);
         const byPackage = groupByPackage(classes);
         const packageItems: vscode.TestItem[] = [];
         for (const [packageName, packageClasses] of byPackage) {
-            packageItems.push(this.buildPackageItem(module.artifactId, packageName, packageClasses));
+            packageItems.push(this.buildPackageItem(module, id, packageName, packageClasses));
         }
         moduleItem.children.replace(packageItems);
         return moduleItem;
     }
 
     private buildPackageItem(
+        module: MavenModule,
         moduleId: string,
         packageName: string,
         classes: readonly TestClassInfo[],
@@ -179,7 +194,7 @@ export class InlineTestBridge {
             );
 
             const fqcn = buildFqcn(packageName, cls.className);
-            this.classItems.set(fqcn, classItem);
+            this.classItems.set(classMapKey(module.key, fqcn), classItem);
             classItemByName.set(cls.className, classItem);
         }
 
@@ -190,7 +205,7 @@ export class InlineTestBridge {
             const fqcn = buildFqcn(packageName, cls.className);
 
             const methodItems = cls.methods.map((method) =>
-                this.buildMethodItem(classId, classItem.uri, fqcn, method),
+                this.buildMethodItem(module.key, classId, classItem.uri, fqcn, method),
             );
             classItem.children.replace(methodItems);
         }
@@ -226,6 +241,7 @@ export class InlineTestBridge {
     }
 
     private buildMethodItem(
+        moduleKey: string,
         classId: string,
         classUri: vscode.Uri | undefined,
         fqcn: string,
@@ -242,9 +258,17 @@ export class InlineTestBridge {
             new vscode.Position(zeroBasedLine, 0),
             new vscode.Position(zeroBasedLine, 0),
         );
-        this.methodItems.set(`${fqcn}#${method.name}`, methodItem);
+        this.methodItems.set(methodMapKey(moduleKey, fqcn, method.name), methodItem);
         return methodItem;
     }
+}
+
+function classMapKey(moduleKey: string, fqcn: string): string {
+    return `${moduleKey}\0${fqcn}`;
+}
+
+function methodMapKey(moduleKey: string, fqcn: string, methodName: string): string {
+    return `${classMapKey(moduleKey, fqcn)}#${methodName}`;
 }
 
 // -------------------------------------------------------------------------
@@ -285,4 +309,3 @@ function groupByPackage(classes: readonly TestClassInfo[]): Map<string, TestClas
     }
     return map;
 }
-

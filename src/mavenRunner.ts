@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ExtensionSettings } from './settings';
 import { SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR } from './constants';
+import { ensureNonRecursiveArgs } from './runPlanning';
 
 export interface MavenRunResult {
     readonly exitCode: number;
@@ -138,31 +139,42 @@ export function runMaven(
 /**
  * Builds Maven CLI arguments for running all tests.
  */
-export function buildRunAllArgs(settings: ExtensionSettings): string[] {
-    return [
+export function buildRunAllArgs(settings: ExtensionSettings, nonRecursive = false): string[] {
+    return ensureNonRecursiveArgs([
         settings.mavenExecutable,
         ...buildProfileFlags(settings.defaultProfiles),
         ...splitArgs(settings.additionalArgs),
         ...settings.defaultCommand.split(/\s+/),
-    ].filter(Boolean);
+    ].filter(Boolean), nonRecursive);
 }
 
 /**
  * Builds Maven CLI arguments for running a specific test class.
  */
-export function buildRunClassArgs(settings: ExtensionSettings, className: string): string[] {
-    return applyTemplate(settings.testClassCommandTemplate, settings, { className });
+export function buildRunClassArgs(
+    settings: ExtensionSettings,
+    className: string,
+    nonRecursive = false,
+): string[] {
+    return ensureNonRecursiveArgs(
+        applyTemplate(settings.testClassCommandTemplate, settings, { className }),
+        nonRecursive,
+    );
 }
 
 /**
  * Builds Maven CLI arguments for re-running a set of failed test classes.
  */
-export function buildRerunFailedArgs(settings: ExtensionSettings, classNames: readonly string[]): string[] {
+export function buildRerunFailedArgs(
+    settings: ExtensionSettings,
+    classNames: readonly string[],
+    nonRecursive = false,
+): string[] {
     if (classNames.length === 0) {
-        return buildRunAllArgs(settings);
+        return buildRunAllArgs(settings, nonRecursive);
     }
     const testParam = classNames.join(',');
-    return buildRunClassArgs(settings, testParam);
+    return buildRunClassArgs(settings, testParam, nonRecursive);
 }
 
 /**

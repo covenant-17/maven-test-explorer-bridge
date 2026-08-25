@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.8] - 2026-08-25
+
+### Fixed
+
+- Prevented duplicate Run All execution by running each top-level Maven reactor once while collecting child-module reports.
+- Made scoped runs and copied Maven commands non-recursive, and made Re-run Failed module-aware when artifact IDs or FQCNs collide.
+- Recorded nonzero Maven exits as failed runs, including failures that produce no XML reports.
+- Kept nested-module Java sources out of parent-module discovery and preserved failed run state across delayed report-watcher events.
+- Made **Copy Full Path** on method rows include the fully qualified method selector and a standard `file:line` source anchor.
+
+### Internal
+
+- Added automated coverage for Maven reactor planning, module identity, result ownership, scoped arguments, and run outcomes.
+
+---
+
 ## [1.0.7] - 2026-08-21
 
 ### Added

@@ -18,6 +18,7 @@ export interface WebviewRunSummary {
     readonly testDurationMs?: number;
     readonly fixtureDurationMs?: number;
     readonly cancelled?: boolean;
+    readonly failed?: boolean;
 }
 
 export interface WebviewState {
@@ -1341,7 +1342,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             summaryElapsedTimer = undefined;
             const stats = state.stats || {};
             const total = stats.total || 0;
-            const hasResults = state.running || total > 0 || Boolean(state.runSummary?.cancelled);
+            const hasResults = state.running || total > 0
+                || Boolean(state.runSummary?.cancelled)
+                || Boolean(state.runSummary?.failed);
             summaryEl.hidden = !hasResults;
             summaryEl.textContent = '';
             if (!hasResults) {

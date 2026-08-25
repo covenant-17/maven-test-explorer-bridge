@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { MavenModule } from './mavenProjectDetector';
+import type { MavenModule } from './mavenProjectDetector';
+import { moduleItemId, resolveModuleForResult } from './mavenModule';
 import { buildFqcn, SourceAnnotation, TestClassInfo } from './javaTestScanner';
 import { SuiteResult, TestCaseResult, TestCaseStatus } from './surefireParser';
 import { parseFilterExpression, TestFilterExpression } from './filterExpression';
@@ -135,7 +136,7 @@ export function buildCustomTree(
                 });
                 classNodesByName.set(cls.className, classNode);
                 nodesById.set(classNode.id, classNode);
-                classByFqcn.set(fqcn, classNode);
+                classByFqcn.set(moduleClassKey(module, fqcn), classNode);
             }
 
             for (const cls of packageClasses) {
@@ -167,7 +168,7 @@ export function buildCustomTree(
                     });
                     classNode.children.push(methodNode);
                     nodesById.set(methodNode.id, methodNode);
-                    methodByFqcnAndName.set(`${fqcn}#${method.name}`, methodNode);
+                    methodByFqcnAndName.set(moduleMethodKey(module, fqcn, method.name), methodNode);
                 }
             }
 
@@ -273,14 +274,15 @@ function materializeResults(
             if (!module) {
                 continue;
             }
-            let classNode = classByFqcn.get(tc.className);
+            let classNode = classByFqcn.get(moduleClassKey(module, tc.className));
             if (!classNode) {
                 classNode = createResultOnlyClass(module, tc.className, nodesById, classByFqcn);
             }
             addSubtreeIds(resolvedNodeIds, classNode);
 
             const exactKey = `${tc.className}#${tc.methodName}`;
-            const exactMethod = methodByFqcnAndName.get(exactKey);
+            const exactModuleKey = moduleMethodKey(module, tc.className, tc.methodName);
+            const exactMethod = methodByFqcnAndName.get(exactModuleKey);
             const occurrenceTotal = occurrenceTotals.get(exactKey) ?? 1;
             if (exactMethod && occurrenceTotal === 1) {
                 applyCaseResult(exactMethod, tc);
@@ -324,7 +326,7 @@ function materializeResults(
             }
 
             const parentMethodName = staticMethodName(tc.methodName);
-            const parentMethod = methodByFqcnAndName.get(`${tc.className}#${parentMethodName}`);
+            const parentMethod = methodByFqcnAndName.get(moduleMethodKey(module, tc.className, parentMethodName));
             const kind: CustomNodeKind = tc.methodName.startsWith('@') ? 'lifecycle' : 'virtualMethod';
             if (parentMethod && kind === 'virtualMethod') {
                 parentMethod.hasVirtualInvocations = true;
@@ -396,7 +398,7 @@ function createResultOnlyClass(
     });
     packageNode.children.push(classNode);
     nodesById.set(classNode.id, classNode);
-    classByFqcn.set(fqcn, classNode);
+    classByFqcn.set(moduleClassKey(module, fqcn), classNode);
     return classNode;
 }
 
@@ -571,7 +573,7 @@ function createNode(args: {
         description: args.description,
         parentId: args.parentId,
         children: [],
-        moduleId: args.module.artifactId,
+        moduleId: moduleItemId(args.module),
         moduleDir: args.module.moduleDir,
         packageName: args.packageName,
         fqcn: args.fqcn,
@@ -600,17 +602,14 @@ function findModuleForResult(
     modulesWithClasses: readonly ModuleClasses[],
     moduleByDir: ReadonlyMap<string, MavenModule>,
 ): MavenModule | undefined {
-    for (const [moduleDir, module] of moduleByDir) {
-        if (suite.xmlPath.startsWith(moduleDir + path.sep) || suite.xmlPath.startsWith(moduleDir + '/')) {
-            return module;
-        }
-    }
-    for (const { module, classes } of modulesWithClasses) {
-        if (classes.some((cls) => buildFqcn(cls.packageName, cls.className) === tc.className)) {
-            return module;
-        }
-    }
-    return undefined;
+    const classMatches = modulesWithClasses.filter(({ classes }) =>
+        classes.some((cls) => buildFqcn(cls.packageName, cls.className) === tc.className),
+    );
+    return resolveModuleForResult(
+        Array.from(moduleByDir.values()),
+        suite.xmlPath,
+        classMatches.map(({ module }) => module.key),
+    );
 }
 
 function staticMethodName(methodName: string): string {
@@ -768,7 +767,15 @@ function normalizeTag(value: string): string {
 }
 
 function moduleId(module: MavenModule): string {
-    return `module:${module.artifactId}`;
+    return moduleItemId(module);
+}
+
+function moduleClassKey(module: MavenModule, fqcn: string): string {
+    return `${module.key}\0${fqcn}`;
+}
+
+function moduleMethodKey(module: MavenModule, fqcn: string, methodName: string): string {
+    return `${moduleClassKey(module, fqcn)}#${methodName}`;
 }
 
 function packageId(module: MavenModule, packageName: string): string {

@@ -16,15 +16,15 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 ## Features
 
 - **Dedicated Tree and List views** — browse deterministic project, package, class, method, dynamic-invocation, and lifecycle nodes.
-- **Multi-module and multi-root discovery** — locate Maven modules from `pom.xml` files across the open workspace.
+- **Reactor-aware multi-module discovery** — locate Maven modules across multi-root workspaces and execute each top-level reactor only once.
 - **JUnit 5 source discovery** — recognize `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, nested classes, and inherited test-interface methods.
 - **Surefire and Failsafe result mapping** — show passed, failed, errored, skipped, and total counts while retaining source navigation and error details.
 - **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
-- **Run from the UI** — run the workspace, a project, package, class, method, or a grouped multi-selection through Maven.
+- **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
 - **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
-- **Run History** — store and restore recent result sets per workspace; retention is configurable from 1 to 100 entries.
-- **Re-run Failed** — rerun classes represented by the current failed or errored results.
+- **Run History** — store and restore completed, failed, or cancelled result sets per workspace; retention is configurable from 1 to 100 entries.
+- **Re-run Failed** — rerun failed or errored classes in the exact Maven module that produced each report.
 - **Flexible filtering** — combine text, status, JUnit tag, and string-annotation terms with AND/OR expressions.
 - **Maven/JUnit selector search** — paste `Class#method` or `fully.qualified.Class#method` to find a specific test method.
 - **Flexible sorting** — sort by source location, name, status, or duration in ascending or descending order.
@@ -57,7 +57,7 @@ By default the extension prefers the Maven Wrapper and falls back to `mvn`. Chan
 
 | Button | Action |
 |---|---|
-| ▶ | Run all discovered Maven modules |
+| ▶ | Run each top-level Maven reactor once and collect every child-module report |
 | ■ | Stop the active run; visible only while Maven is running |
 | ↺ | Rescan modules and Java test sources |
 | 🕐 | Open Run History and restore a previous result set |
@@ -72,7 +72,7 @@ By default the extension prefers the Maven Wrapper and falls back to `mvn`. Chan
 - A parent and its selected descendants are deduplicated before Maven targets are generated.
 - Double-click a source-backed row or press `Enter` to open its Java declaration.
 - Press `Space` to run the focused row. Use the context-menu key or `Shift+F10` for row actions.
-- Right-click a multi-selection to run it as a group or open **Copy...** actions.
+- Right-click a multi-selection to run it as a group or open **Copy...** actions. **Copy Full Path** on a method includes both its selector and source anchor, for example `com.example.AppTest#wrongGreet() — C:\workspace\src\test\java\com\example\AppTest.java:67`.
 
 ### Filter syntax
 
@@ -100,9 +100,9 @@ The following user-facing commands are registered. Toolbar-only sort, view, expa
 | Command title | Description |
 |---|---|
 | `Maven: Refresh Tests` | Rescan Maven modules and Java test sources |
-| `Maven: Run All Tests` | Run the configured all-tests goals in every discovered module |
+| `Maven: Run All Tests` | Run the configured goals once per top-level reactor |
 | `Maven: Stop Current Run` | Cancel the active Maven process tree |
-| `Maven: Re-run Failed Tests` | Rerun classes represented by failed or errored results |
+| `Maven: Re-run Failed Tests` | Rerun failed or errored classes in their originating modules |
 | `Maven: Clean Test Reports` | Delete matching `TEST-*.xml` report files |
 | `Clear Test Results` | Reset current results while preserving history |
 | `Clear Results & History` | Reset current results and delete stored run history |
@@ -135,6 +135,8 @@ VS Code may prefix these titles with the **Maven Test Explorer** command categor
 | `mavenTestExplorer.testClassCommandTemplate` | `"{maven} {profiles} {args} -Dtest={className} test"` | Template for class, method, grouped, and failed-test runs |
 
 The class command template supports `{maven}`, `{profiles}`, `{args}`, `{className}`, and `{methodName}` placeholders. The default grouped selector is passed through `{className}`.
+
+Run All preserves normal Maven reactor behavior. Scoped UI runs and copied scoped commands add `-N` unless the command already contains `-N` or `--non-recursive`, preventing an aggregator POM from rerunning its children.
 
 ### Results and Display
 
@@ -192,16 +194,18 @@ The custom webview is the primary explorer UI. The native VS Code Testing API is
 
 ```powershell
 npm ci
+npm test
 npm run compile
 npm run package
 npx @vscode/vsce ls
 ```
 
-- `npm run compile` performs strict TypeScript checking, validates generated webview JavaScript/layout invariants, and creates a development bundle.
+- `npm test` covers Maven reactor planning, stable module identity, nested-module ownership, result ownership, scoped arguments, watcher refreshes, and run outcomes.
+- `npm run compile` performs strict TypeScript checking, runs the tests, validates generated webview JavaScript/layout invariants, and creates a development bundle.
 - `npm run package` repeats the checks and creates the production bundle in `dist/extension.js`.
 - `npx @vscode/vsce ls` shows the files that will be included in the extension package.
 
-The repository currently has no unit or integration test suite; compile/package validation does not replace an Extension Development Host smoke test for visual or interaction changes.
+Automated checks do not replace an Extension Development Host smoke test for visual or interaction changes.
 
 ## Project Structure
 
@@ -213,7 +217,9 @@ src/
 ├── inlineTestBridge.ts      # Minimal native Testing API/editor bridge
 ├── javaTestScanner.ts       # Java source discovery and inherited test contracts
 ├── mavenProjectDetector.ts  # pom.xml discovery and module metadata
+├── mavenModule.ts           # Stable module IDs, POM descriptors, reactor grouping
 ├── mavenRunner.ts           # Maven argument generation, process output, cancellation
+├── runPlanning.ts           # Scoped arguments and run outcome rules
 ├── surefireParser.ts        # Surefire/Failsafe TEST-*.xml parsing
 ├── resultPublisher.ts       # Result mapping, messages, stack frames, inline output
 ├── filterExpression.ts      # AND/OR filter tokenizer and parser

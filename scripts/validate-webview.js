@@ -22,4 +22,12 @@ if (!/flex:\s*0\s+0\s+auto\s*;/.test(rightMetaRule)) {
     throw new Error('Row statistics must not shrink behind the test name.');
 }
 
+if (!source.includes("Boolean(state.runSummary?.failed)")) {
+    throw new Error('Failed Maven runs must keep zero-result summaries visible.');
+}
+
+if (source.includes("textSpan('Maven failed'") || source.includes('failed-label')) {
+    throw new Error('Failed Maven runs must not add a dedicated summary badge.');
+}
+
 console.log('[validate-webview] Generated webview JavaScript syntax and layout invariants are valid.');

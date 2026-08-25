@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { JAVA_TEST_GLOB } from './constants';
+import { isPathInside } from './mavenModule';
 
 export interface SourceAnnotation {
     readonly name: string;
@@ -73,6 +74,7 @@ const METHOD_DECL_PATTERN = /^(?:(?:public|protected|private|default)\s+)?(?:sta
 export async function scanTestFiles(
     moduleDir: string,
     globs: readonly string[] = [JAVA_TEST_GLOB],
+    excludedModuleDirs: readonly string[] = [],
 ): Promise<TestClassInfo[]> {
     const seen = new Set<string>();
     const allUris: vscode.Uri[] = [];
@@ -81,6 +83,9 @@ export async function scanTestFiles(
         const pattern = new vscode.RelativePattern(moduleDir, glob);
         const found = await vscode.workspace.findFiles(pattern);
         for (const uri of found) {
+            if (excludedModuleDirs.some((excludedDir) => isPathInside(excludedDir, uri.fsPath))) {
+                continue;
+            }
             if (!seen.has(uri.fsPath)) {
                 seen.add(uri.fsPath);
                 allUris.push(uri);

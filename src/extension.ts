@@ -2,6 +2,14 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
+import {
+    buildReactorGroups,
+    dedupeMavenModules,
+    isPathInside,
+    moduleItemId,
+    moduleKeyForDir,
+    resolveModuleForResult,
+} from './mavenModule';
 import { scanTestFiles, TestClassInfo } from './javaTestScanner';
 import { parseReportFile, SuiteResult, TestCaseResult } from './surefireParser';
 import { InlineTestBridge } from './inlineTestBridge';
@@ -15,6 +23,8 @@ import {
     runMaven,
 } from './mavenRunner';
 import { readSettings } from './settings';
+import { determineRunOutcome, MavenExecutionRecord, reportsStillMatchLastRun } from './runPlanning';
+import { fullPathForNode } from './sourceReference';
 import {
     CMD_REVEAL_IN_CUSTOM_EXPLORER,
     CMD_CONFIGURE_TREE_PARTS,
@@ -78,9 +88,16 @@ import {
 
 interface RunTarget {
     module: MavenModule;
+    scopeModules: readonly MavenModule[];
+    mode: 'reactor' | 'module';
     classNames: readonly string[];
     runningNodeIds?: readonly string[];
     expectedTestCount?: number;
+}
+
+interface FailedClassTarget {
+    readonly moduleKey: string;
+    readonly fqcn: string;
 }
 
 let outputChannel: vscode.OutputChannel;
@@ -100,6 +117,7 @@ let runStartedAt: number | undefined;
 let lastRunDurationMs: number | undefined;
 let lastRunResults: SuiteResult[] = [];
 let lastRunCancelled = false;
+let lastRunFailed = false;
 let totalRunClasses = 0;
 const currentRunClasses = new Set<string>();
 const completedRunClasses = new Set<string>();
@@ -107,7 +125,7 @@ let selectedNodePersistTimer: ReturnType<typeof setTimeout> | undefined;
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
-const lastFailedClassNames = new Set<string>();
+const lastFailedClassTargets = new Map<string, FailedClassTarget>();
 const RESULT_CACHE_KEY = 'mavenTestExplorer.resultCache';
 const EXPANDED_IDS_KEY = 'mavenTestExplorer.customExpandedIds';
 const SELECTED_ID_KEY = 'mavenTestExplorer.customSelectedId';
@@ -201,12 +219,16 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
     const settings = readSettings();
     restoreResultCacheIfNeeded(context);
     currentModules = await discoverModules();
+    await migrateLegacyTreeState(context);
     if (pruneResultCacheForModules(currentModules) > 0) {
         await saveResultCache(context);
     }
     modulesWithClasses = [];
     for (const module of currentModules) {
-        const classes = await scanTestFiles(module.moduleDir, settings.testSourceGlobs);
+        const nestedModuleDirs = currentModules
+            .filter((candidate) => candidate.key !== module.key && isPathInside(module.moduleDir, candidate.moduleDir))
+            .map((candidate) => candidate.moduleDir);
+        const classes = await scanTestFiles(module.moduleDir, settings.testSourceGlobs, nestedModuleDirs);
         modulesWithClasses.push({ module, classes });
         outputChannel.appendLine(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
     }
@@ -437,11 +459,14 @@ function hasVisibleExpandedItems(roots: readonly CustomTestNode[]): boolean {
 }
 
 async function runAll(context: vscode.ExtensionContext): Promise<void> {
-    await runTargets(context, currentModules.map((module) => ({
-        module,
+    const targets = buildReactorGroups(currentModules).map((group) => ({
+        module: group.executionModule,
+        scopeModules: group.scopeModules,
+        mode: 'reactor' as const,
         classNames: [],
-        runningNodeIds: nodeIdsForModule(module),
-    })), 'Run All');
+        runningNodeIds: group.scopeModules.flatMap(nodeIdsForModule),
+    }));
+    await runTargets(context, targets, 'Run All');
 }
 
 function collectProjectTags(roots: readonly CustomTestNode[]): string[] {
@@ -523,7 +548,13 @@ async function runNode(context: vscode.ExtensionContext, id: string): Promise<vo
         return;
     }
     const classNames = findRunnableClassTargets(node);
-    await runTargets(context, [{ module, classNames, runningNodeIds: collectSubtreeNodeIds(node) }], nodePathLabel(node));
+    await runTargets(context, [{
+        module,
+        scopeModules: [module],
+        mode: 'module',
+        classNames,
+        runningNodeIds: collectSubtreeNodeIds(node),
+    }], nodePathLabel(node));
 }
 
 async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]): Promise<void> {
@@ -558,6 +589,8 @@ async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]
     if (grouped.size > 0) {
         const targets = Array.from(grouped.values()).map((target) => ({
             ...target,
+            scopeModules: [target.module],
+            mode: 'module' as const,
             classNames: Array.from(new Set(target.classNames)),
             runningNodeIds: Array.from(new Set(target.runningNodeIds)),
         }));
@@ -566,22 +599,27 @@ async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]
 }
 
 async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
-    if (lastFailedClassNames.size === 0) {
+    if (lastFailedClassTargets.size === 0) {
         vscode.window.showInformationMessage('Maven Test Explorer: No failed tests to re-run.');
         return;
     }
     const moduleTargets = new Map<string, { module: MavenModule; classNames: string[]; runningNodeIds: string[] }>();
-    for (const className of lastFailedClassNames) {
-        const module = findModuleForClass(className);
+    for (const failedTarget of lastFailedClassTargets.values()) {
+        const module = currentModules.find((candidate) => candidate.key === failedTarget.moduleKey);
         if (!module) {
+            outputChannel.appendLine(`[Runner] Failed test module is no longer available: ${failedTarget.moduleKey}`);
             continue;
         }
-        const entry = moduleTargets.get(module.artifactId) ?? { module, classNames: [], runningNodeIds: [] };
-        entry.classNames.push(simpleClassTarget(className));
-        entry.runningNodeIds.push(...nodeIdsForFqcn(className));
-        moduleTargets.set(module.artifactId, entry);
+        const entry = moduleTargets.get(module.moduleDir) ?? { module, classNames: [], runningNodeIds: [] };
+        entry.classNames.push(simpleClassTarget(failedTarget.fqcn));
+        entry.runningNodeIds.push(...nodeIdsForFqcn(module.key, failedTarget.fqcn));
+        moduleTargets.set(module.moduleDir, entry);
     }
-    await runTargets(context, Array.from(moduleTargets.values()), 'Re-run Failed');
+    await runTargets(context, Array.from(moduleTargets.values()).map((target) => ({
+        ...target,
+        scopeModules: [target.module],
+        mode: 'module' as const,
+    })), 'Re-run Failed');
 }
 
 async function runTargets(
@@ -589,7 +627,7 @@ async function runTargets(
     targets: readonly RunTarget[],
     historyLabel: string,
 ): Promise<void> {
-    if (running) {
+    if (running || targets.length === 0) {
         return;
     }
     const executionTargets = targets.map((target) => ({
@@ -601,7 +639,7 @@ async function runTargets(
         outputChannel.show(true);
     }
     outputChannel.appendLine(
-        `[Runner] Scope: ${executionTargets.length} Maven module(s), ${executionTargets.reduce((sum, target) => sum + target.expectedTestCount, 0)} test(s): ${executionTargets.map((target) => target.module.moduleDir).join(', ')}`,
+        `[Runner] Scope: ${executionTargets.length} Maven execution(s), ${currentModules.length} discovered module(s), ${executionTargets.reduce((sum, target) => sum + target.expectedTestCount, 0)} test(s): ${executionTargets.map((target) => target.module.moduleDir).join(', ')}`,
     );
     running = true;
     runtimeRunningNodeIds = new Set(executionTargets.flatMap((target) => target.runningNodeIds ?? []));
@@ -610,6 +648,7 @@ async function runTargets(
     lastRunDurationMs = undefined;
     lastRunResults = [];
     lastRunCancelled = false;
+    lastRunFailed = false;
     currentRunClasses.clear();
     completedRunClasses.clear();
     totalRunClasses = expectedClassCount(runtimeRunningNodeIds);
@@ -618,6 +657,7 @@ async function runTargets(
     const cancellationSource = new vscode.CancellationTokenSource();
     activeCancellationSource = cancellationSource;
     let cancelled = false;
+    const executions: MavenExecutionRecord[] = [];
     const allResults: SuiteResult[] = [];
     const fullRunModuleDirs = new Set<string>();
     const inlineItems = inlineItemsForTargets(executionTargets);
@@ -634,27 +674,39 @@ async function runTargets(
     try {
         for (const target of executionTargets) {
             if (settings.clearReportsBeforeRun) {
-                clearReportDirectories(target.module.moduleDir, settings.reportGlobs);
-                outputChannel.appendLine(`[Runner] Cleared reports in: ${target.module.moduleDir}`);
+                for (const scopeModule of target.scopeModules) {
+                    clearReportDirectories(scopeModule.moduleDir, settings.reportGlobs);
+                    outputChannel.appendLine(`[Runner] Cleared reports in: ${scopeModule.moduleDir}`);
+                }
             }
 
             let args: string[];
             if (target.classNames.length === 0) {
-                fullRunModuleDirs.add(target.module.moduleDir);
-                args = buildRunAllArgs({ ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) });
+                for (const scopeModule of target.scopeModules) {
+                    fullRunModuleDirs.add(scopeModule.moduleDir);
+                }
+                args = buildRunAllArgs(
+                    { ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) },
+                    target.mode === 'module',
+                );
             } else if (historyLabel === 'Re-run Failed') {
                 args = buildRerunFailedArgs(
                     { ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) },
                     target.classNames,
+                    true,
                 );
             } else {
                 args = buildRunClassArgs(
                     { ...settings, mavenExecutable: resolveExecutable(settings, target.module.moduleDir) },
                     normalizeClassTargets(target.classNames).join(','),
+                    true,
                 );
             }
 
-            const poller = startRuntimeReportPolling(target.module.moduleDir, settings.reportGlobs);
+            const poller = startRuntimeReportPolling(
+                target.scopeModules.map((module) => module.moduleDir),
+                settings.reportGlobs,
+            );
             try {
                 const result = await runMaven(
                     target.module.moduleDir,
@@ -675,12 +727,22 @@ async function runTargets(
                     },
                 );
                 poller.flush();
+                executions.push({
+                    moduleKey: target.module.key,
+                    moduleDir: target.module.moduleDir,
+                    exitCode: result.exitCode,
+                });
                 cancelled = cancelled || result.cancelled;
-                const reportedResults = readAllReports(target.module.moduleDir, settings.reportGlobs);
+                const reportedResults = target.scopeModules.flatMap((module) =>
+                    readAllReports(module.moduleDir, settings.reportGlobs),
+                );
                 const suiteResults = result.cancelled
                     ? reportedResults
                     : addSkippedResultsForLifecycleFailures(reportedResults, target.runningNodeIds ?? []);
                 allResults.push(...suiteResults);
+                if (!result.cancelled && result.exitCode !== 0 && reportedResults.length === 0) {
+                    markTargetInfrastructureFailure(inlineRun, target, result.exitCode);
+                }
                 if (result.cancelled) {
                     break;
                 }
@@ -694,7 +756,30 @@ async function runTargets(
             updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
             if (settings.runHistoryEnabled) {
-                saveRunToHistory(context, allResults, historyLabel, cancelled ? 'cancelled' : 'completed');
+                saveRunToHistory(
+                    context,
+                    allResults,
+                    historyLabel,
+                    determineRunOutcome(cancelled, executions),
+                    executions,
+                );
+            }
+            const failedWithoutReports = !cancelled
+                && allResults.length === 0
+                && executions.some((execution) => execution.exitCode !== 0);
+            if (failedWithoutReports) {
+                const exitCodes = executions
+                    .filter((execution) => execution.exitCode !== 0)
+                    .map((execution) => execution.exitCode)
+                    .join(', ');
+                void vscode.window.showErrorMessage(
+                    `Maven Test Explorer: Maven exited with code ${exitCodes} without producing test reports.`,
+                    'Show Output',
+                ).then((selection) => {
+                    if (selection === 'Show Output') {
+                        outputChannel.show(true);
+                    }
+                });
             }
             if (allResults.length > 0) {
                 publishResults(
@@ -713,6 +798,7 @@ async function runTargets(
             lastRunDurationMs = runStartedAt === undefined ? undefined : Date.now() - runStartedAt;
             lastRunResults = [...allResults];
             lastRunCancelled = cancelled;
+            lastRunFailed = determineRunOutcome(cancelled, executions) === 'failed';
             running = false;
             runStartedAt = undefined;
             currentRunClasses.clear();
@@ -769,7 +855,9 @@ function expectedClassCount(runningNodeIds: ReadonlySet<string>): number {
 function buildWebviewRunSummary(): WebviewRunSummary {
     const suiteResults = running
         ? Array.from(runtimeResultByXmlPath.values())
-        : (lastRunResults.length > 0 ? lastRunResults : Array.from(resultCache.values()));
+        : (lastRunResults.length > 0 || lastRunCancelled || lastRunFailed
+            ? lastRunResults
+            : Array.from(resultCache.values()));
     const timing = calculateSuiteTiming(suiteResults);
     const fallbackRunDuration = timing.suiteDurationMs;
     return {
@@ -781,6 +869,7 @@ function buildWebviewRunSummary(): WebviewRunSummary {
         testDurationMs: timing.testDurationMs,
         fixtureDurationMs: timing.fixtureDurationMs,
         cancelled: !running && lastRunCancelled,
+        failed: !running && lastRunFailed,
     };
 }
 
@@ -826,10 +915,14 @@ function addSkippedResultsForLifecycleFailures(
     const reportedMethods = new Set<string>();
     for (const suite of suiteResults) {
         for (const testCase of suite.testCases) {
-            reportedMethods.add(`${testCase.className}#${testCase.methodName}`);
+            const module = findModuleForResult(suite, testCase.className);
+            if (!module) {
+                continue;
+            }
+            reportedMethods.add(moduleMethodResultKey(module.key, testCase.className, testCase.methodName));
             if (testCase.methodName.startsWith('@')
                 && (testCase.status === 'failed' || testCase.status === 'error')) {
-                lifecycleFailureClasses.add(testCase.className);
+                lifecycleFailureClasses.add(moduleClassResultKey(module.key, testCase.className));
             }
         }
     }
@@ -843,11 +936,16 @@ function addSkippedResultsForLifecycleFailures(
         if (node?.kind !== 'method' || !node.fqcn || !node.methodName) {
             continue;
         }
-        const key = `${node.fqcn}#${node.methodName}`;
-        if (!lifecycleFailureClasses.has(node.fqcn) || reportedMethods.has(key)) {
+        const module = currentModules.find((candidate) => candidate.moduleDir === node.moduleDir);
+        if (!module) {
             continue;
         }
-        const skipped = skippedByClass.get(node.fqcn) ?? [];
+        const classKey = moduleClassResultKey(module.key, node.fqcn);
+        const methodKey = moduleMethodResultKey(module.key, node.fqcn, node.methodName);
+        if (!lifecycleFailureClasses.has(classKey) || reportedMethods.has(methodKey)) {
+            continue;
+        }
+        const skipped = skippedByClass.get(classKey) ?? [];
         skipped.push({
             className: node.fqcn,
             methodName: node.methodName,
@@ -860,16 +958,18 @@ function addSkippedResultsForLifecycleFailures(
             systemErr: undefined,
             synthetic: true,
         });
-        skippedByClass.set(node.fqcn, skipped);
-        reportedMethods.add(key);
+        skippedByClass.set(classKey, skipped);
+        reportedMethods.add(methodKey);
     }
 
     return suiteResults.map((suite) => {
-        const className = skippedByClass.has(suite.suiteName)
-            ? suite.suiteName
-            : suite.testCases[0]?.className ?? '';
-        const skipped = skippedByClass.get(className);
-        skippedByClass.delete(className);
+        const className = suite.testCases[0]?.className ?? suite.suiteName;
+        const module = findModuleForResult(suite, className);
+        const classKey = module ? moduleClassResultKey(module.key, className) : undefined;
+        const skipped = classKey ? skippedByClass.get(classKey) : undefined;
+        if (classKey) {
+            skippedByClass.delete(classKey);
+        }
         return skipped?.length
             ? { ...suite, testCases: [...suite.testCases, ...skipped] }
             : suite;
@@ -878,12 +978,25 @@ function addSkippedResultsForLifecycleFailures(
 
 function inlineItemsForTargets(targets: readonly RunTarget[]): vscode.TestItem[] {
     const items = new Map<string, vscode.TestItem>();
-    for (const id of targets.flatMap((target) => target.runningNodeIds ?? [])) {
+    for (const target of targets) {
+        for (const item of inlineItemsForTarget(target)) {
+            items.set(item.id, item);
+        }
+    }
+    return Array.from(items.values());
+}
+
+function inlineItemsForTarget(target: RunTarget): vscode.TestItem[] {
+    const items = new Map<string, vscode.TestItem>();
+    for (const id of target.runningNodeIds ?? []) {
         const node = currentTree.nodesById.get(id);
         if (node?.kind !== 'method' || !node.fqcn || !node.methodName) {
             continue;
         }
-        const item = inlineTestBridge.findMethodItem(node.fqcn, node.methodName);
+        const module = currentModules.find((candidate) => candidate.moduleDir === node.moduleDir);
+        const item = module
+            ? inlineTestBridge.findMethodItem(module.key, node.fqcn, node.methodName)
+            : undefined;
         if (item) {
             items.set(item.id, item);
         }
@@ -891,14 +1004,31 @@ function inlineItemsForTargets(targets: readonly RunTarget[]): vscode.TestItem[]
     return Array.from(items.values());
 }
 
+function markTargetInfrastructureFailure(
+    run: vscode.TestRun,
+    target: RunTarget,
+    exitCode: number,
+): void {
+    const message = new vscode.TestMessage(
+        `Maven exited with code ${exitCode} before producing test reports. See the Maven Test Explorer output channel.`,
+    );
+    for (const item of inlineItemsForTarget(target)) {
+        run.errored(item, message);
+    }
+}
+
 function nodeIdsForModule(module: MavenModule): string[] {
     const root = currentTree.roots.find((node) => node.moduleDir === module.moduleDir);
     return root ? collectSubtreeNodeIds(root) : [];
 }
 
-function nodeIdsForFqcn(fqcn: string): string[] {
+function nodeIdsForFqcn(moduleKey: string, fqcn: string): string[] {
+    const module = currentModules.find((candidate) => candidate.key === moduleKey);
+    if (!module) {
+        return [];
+    }
     for (const node of currentTree.nodesById.values()) {
-        if (node.kind === 'class' && node.fqcn === fqcn) {
+        if (node.kind === 'class' && node.moduleDir === module.moduleDir && node.fqcn === fqcn) {
             return collectSubtreeNodeIds(node);
         }
     }
@@ -918,17 +1048,17 @@ function collectSubtreeNodeIds(node: CustomTestNode): string[] {
 }
 
 function startRuntimeReportPolling(
-    moduleDir: string,
+    moduleDirs: readonly string[],
     reportGlobs: readonly string[],
 ): { flush(): void; dispose(): void } {
     const seenMtimes = new Map<string, number>();
-    for (const xmlPath of listReportFiles(moduleDir, reportGlobs)) {
+    for (const xmlPath of moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs))) {
         seenMtimes.set(xmlPath, fileMtimeMs(xmlPath));
     }
 
     const scan = () => {
         let changed = false;
-        for (const xmlPath of listReportFiles(moduleDir, reportGlobs)) {
+        for (const xmlPath of moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs))) {
             const mtimeMs = fileMtimeMs(xmlPath);
             if (seenMtimes.get(xmlPath) === mtimeMs) {
                 continue;
@@ -1167,10 +1297,11 @@ function metadataPartDescription(part: TestMetadataPart): string {
 
 async function clearResults(context: vscode.ExtensionContext, withHistory: boolean): Promise<void> {
     resultCache.clear();
-    lastFailedClassNames.clear();
+    lastFailedClassTargets.clear();
     lastRunResults = [];
     lastRunDurationMs = undefined;
     lastRunCancelled = false;
+    lastRunFailed = false;
     totalRunClasses = 0;
     completedRunClasses.clear();
     await context.workspaceState.update(RESULT_CACHE_KEY, undefined);
@@ -1192,7 +1323,13 @@ async function showHistory(context: vscode.ExtensionContext): Promise<void> {
         return;
     }
     const selected = await vscode.window.showQuickPick(
-        history.map((entry) => ({ label: entry.label, description: entry.source, entry })),
+        history.map((entry) => ({
+            label: entry.label,
+            description: entry.executions?.some((execution) => execution.exitCode !== 0)
+                ? `${entry.source} · Maven exit ${entry.executions.filter((execution) => execution.exitCode !== 0).map((execution) => execution.exitCode).join(', ')}`
+                : entry.source,
+            entry,
+        })),
         { title: 'Maven Test Run History', placeHolder: 'Select a run to restore its results' },
     );
     if (!selected) {
@@ -1203,6 +1340,7 @@ async function showHistory(context: vscode.ExtensionContext): Promise<void> {
     lastRunResults = [...selected.entry.suiteResults];
     lastRunDurationMs = undefined;
     lastRunCancelled = selected.entry.outcome === 'cancelled';
+    lastRunFailed = selected.entry.outcome === 'failed';
     totalRunClasses = new Set(selected.entry.suiteResults.map((suite) => suite.suiteName)).size;
     completedRunClasses.clear();
     updateFailedClasses(selected.entry.suiteResults);
@@ -1373,8 +1511,8 @@ async function mavenCommandForNode(node: CustomTestNode): Promise<string | undef
     const executableSettings = { ...settings, mavenExecutable: resolveExecutable(settings, module.moduleDir) };
     const targets = findRunnableClassTargets(node);
     const args = targets.length === 0
-        ? buildRunAllArgs(executableSettings)
-        : buildRunClassArgs(executableSettings, normalizeClassTargets(targets).join(','));
+        ? buildRunAllArgs(executableSettings, true)
+        : buildRunClassArgs(executableSettings, normalizeClassTargets(targets).join(','), true);
     return args.join(' ');
 }
 
@@ -1458,11 +1596,19 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
             const changedResults = currentModules
                 .filter((module) => changedModuleDirs.has(module.moduleDir))
                 .flatMap((module) => readAllReports(module.moduleDir, reportGlobs));
+            const previousResultsForChangedModules = lastRunResults.filter((suite) =>
+                Array.from(changedModuleDirs).some((moduleDir) => isPathInside(moduleDir, suite.xmlPath)),
+            );
+            const reportsMatchLastRun = reportsStillMatchLastRun(
+                changedResults,
+                previousResultsForChangedModules,
+            );
             updateResultCache(changedResults, changedModuleDirs);
-            if (!running) {
+            if (!running && !reportsMatchLastRun) {
                 lastRunResults = [];
                 lastRunDurationMs = undefined;
                 lastRunCancelled = false;
+                lastRunFailed = false;
             }
             updateFailedClasses(Array.from(resultCache.values()));
             await saveResultCache(context);
@@ -1515,6 +1661,7 @@ async function reloadConfiguredReports(context: vscode.ExtensionContext): Promis
     lastRunResults = [];
     lastRunDurationMs = undefined;
     lastRunCancelled = false;
+    lastRunFailed = false;
     updateFailedClasses(results);
     await saveResultCache(context);
     rebuildTree();
@@ -1526,8 +1673,59 @@ async function discoverModules(): Promise<MavenModule[]> {
     for (const folder of folders) {
         modules.push(...await findMavenModules(folder));
     }
-    outputChannel.appendLine(`[Discovery] Found ${modules.length} Maven module(s)`);
-    return modules;
+    const uniqueModules = dedupeMavenModules(modules);
+    const knownDirs = new Set(uniqueModules.map((module) => module.key));
+    for (const module of uniqueModules) {
+        for (const declaredDir of module.declaredModuleDirs) {
+            if (!knownDirs.has(moduleKeyForDir(declaredDir))) {
+                outputChannel.appendLine(
+                    `[Discovery] ${module.artifactId}: declared module is outside the discovered workspace: ${declaredDir}`,
+                );
+            }
+        }
+    }
+    outputChannel.appendLine(`[Discovery] Found ${uniqueModules.length} unique Maven module(s)`);
+    return uniqueModules;
+}
+
+async function migrateLegacyTreeState(context: vscode.ExtensionContext): Promise<void> {
+    const byArtifact = new Map<string, MavenModule[]>();
+    for (const module of currentModules) {
+        const matches = byArtifact.get(module.artifactId) ?? [];
+        matches.push(module);
+        byArtifact.set(module.artifactId, matches);
+    }
+    const migrateId = (id: string | undefined): string | undefined => {
+        if (!id) {
+            return undefined;
+        }
+        for (const [artifactId, modules] of byArtifact) {
+            const legacyPrefix = `module:${artifactId}`;
+            if (id === legacyPrefix || id.startsWith(`${legacyPrefix}/`)) {
+                return modules.length === 1
+                    ? `${moduleItemId(modules[0])}${id.substring(legacyPrefix.length)}`
+                    : undefined;
+            }
+        }
+        return id;
+    };
+    const migratedExpanded = new Set(Array.from(expandedIds, migrateId).filter((id): id is string => Boolean(id)));
+    const migratedSelected = migrateId(selectedNodeId);
+    const expandedChanged = migratedExpanded.size !== expandedIds.size
+        || Array.from(migratedExpanded).some((id) => !expandedIds.has(id));
+    const selectedChanged = migratedSelected !== selectedNodeId;
+    if (!expandedChanged && !selectedChanged) {
+        return;
+    }
+    expandedIds.clear();
+    for (const id of migratedExpanded) {
+        expandedIds.add(id);
+    }
+    selectedNodeId = migratedSelected;
+    await Promise.all([
+        context.workspaceState.update(EXPANDED_IDS_KEY, Array.from(expandedIds)),
+        context.workspaceState.update(SELECTED_ID_KEY, selectedNodeId),
+    ]);
 }
 
 function readAllReports(moduleDir: string, reportGlobs: readonly string[]): SuiteResult[] {
@@ -1586,33 +1784,6 @@ function updateResultCache(newResults: readonly SuiteResult[], fullRunModuleDirs
     }
 }
 
-function fullPathForNode(node: CustomTestNode): string | undefined {
-    if (node.sourcePath) {
-        return node.sourcePath;
-    }
-    if (node.kind === 'module') {
-        return node.moduleDir;
-    }
-    if (node.kind === 'package') {
-        const descendantSourcePath = firstDescendantSourcePath(node);
-        return descendantSourcePath ? path.dirname(descendantSourcePath) : node.moduleDir;
-    }
-    return undefined;
-}
-
-function firstDescendantSourcePath(node: CustomTestNode): string | undefined {
-    for (const child of node.children) {
-        if (child.sourcePath) {
-            return child.sourcePath;
-        }
-        const nestedPath = firstDescendantSourcePath(child);
-        if (nestedPath) {
-            return nestedPath;
-        }
-    }
-    return undefined;
-}
-
 function indexTestCases(testCases: readonly TestCaseResult[]): Array<[string, TestCaseResult]> {
     const occurrences = new Map<string, number>();
     return testCases.map((tc) => {
@@ -1643,18 +1814,20 @@ function resultCacheKey(suite: SuiteResult): string {
     return path.normalize(suite.xmlPath).toLocaleLowerCase();
 }
 
-function isPathInside(parentDir: string, candidatePath: string): boolean {
-    const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
-    return relative === ''
-        || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
-}
-
 function updateFailedClasses(suiteResults: readonly SuiteResult[]): void {
-    lastFailedClassNames.clear();
+    lastFailedClassTargets.clear();
     for (const suite of suiteResults) {
         for (const tc of suite.testCases) {
             if (tc.status === 'failed' || tc.status === 'error') {
-                lastFailedClassNames.add(tc.className);
+                const module = findModuleForResult(suite, tc.className);
+                if (!module) {
+                    outputChannel.appendLine(
+                        `[Results] Cannot assign failed class to a unique module: ${tc.className} (${suite.xmlPath})`,
+                    );
+                    continue;
+                }
+                const target = { moduleKey: module.key, fqcn: tc.className };
+                lastFailedClassTargets.set(`${module.key}\0${tc.className}`, target);
             }
         }
     }
@@ -1703,13 +1876,23 @@ function markLegacyLifecyclePlaceholders(suite: SuiteResult): SuiteResult {
     };
 }
 
-function findModuleForClass(fqcn: string): MavenModule | undefined {
-    for (const entry of modulesWithClasses) {
-        if (entry.classes.some((cls) => toFqcn(cls) === fqcn)) {
-            return entry.module;
-        }
-    }
-    return currentModules[0];
+function findModuleForResult(suite: SuiteResult, fqcn: string): MavenModule | undefined {
+    const matches = modulesWithClasses.filter(({ classes }) =>
+        classes.some((cls) => toFqcn(cls) === fqcn),
+    );
+    return resolveModuleForResult(
+        currentModules,
+        suite.xmlPath,
+        matches.map(({ module }) => module.key),
+    );
+}
+
+function moduleClassResultKey(moduleKey: string, fqcn: string): string {
+    return `${moduleKey}\0${fqcn}`;
+}
+
+function moduleMethodResultKey(moduleKey: string, fqcn: string, methodName: string): string {
+    return `${moduleClassResultKey(moduleKey, fqcn)}#${methodName}`;
 }
 
 function toFqcn(cls: TestClassInfo): string {
