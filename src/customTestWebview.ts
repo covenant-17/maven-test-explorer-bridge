@@ -6,6 +6,7 @@ import {
     CustomTestNode,
 } from './customTestModel';
 import { TEST_METADATA_PARTS, TEST_ROW_PARTS, TestMetadataPart, TestRowPart } from './rowVisibility';
+import { RUNNING_SPINNER_CYCLE_MS } from './runtimeVisuals';
 
 export const CUSTOM_VIEW_ID = 'mavenTestExplorer.view';
 
@@ -335,6 +336,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             color: var(--vscode-toolbar-activeForeground, var(--vscode-foreground));
             background: var(--vscode-toolbar-hoverBackground);
         }
+        .icon-button.stop-run,
+        .icon-button.stop-run:hover:not(:disabled) {
+            color: var(--vscode-testing-iconFailed, #f14c4c);
+        }
         .icon-button:focus-visible,
         .row:focus-visible,
         .list-separator.project:focus-visible {
@@ -363,7 +368,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .codicon-history::before { content: "\\ea82"; }
         .codicon-refresh::before { content: "\\eb37"; }
         .codicon-run::before { content: "\\eb2c"; }
-        .codicon-debug-stop::before { content: "\\eb4d"; }
+        .codicon-debug-stop::before { content: "\\ead7"; }
         .codicon-close::before { content: "\\ea76"; }
         .codicon-more::before { content: "\\eab4"; }
         .codicon-passed::before { content: "\\eab2"; }
@@ -634,7 +639,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             border: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
             border-top-color: transparent;
             border-radius: 50%;
-            animation: node-spin 2400ms linear infinite;
+            animation: node-spin ${RUNNING_SPINNER_CYCLE_MS}ms linear infinite;
         }
         .status.running::before {
             content: "";
@@ -969,7 +974,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const TOOLTIP_SEPARATOR = '__MAVEN_TEST_EXPLORER_TOOLTIP_SEPARATOR__';
         const TOOLTIP_TITLE_PREFIX = '__MAVEN_TEST_EXPLORER_TOOLTIP_TITLE__';
         const TOOLTIP_DELAY_MS = 1000;
-        const SYSTEM_FILTERS = ['@failed', '@executed'];
+        const SYSTEM_FILTERS = ['@failed', '@passed', '@error', '@skipped', '@executed'];
         let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
         let filterTimer;
         let filterSuggestionItems = [];
@@ -1402,6 +1407,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             right.appendChild(withInternalTooltip(rerunButton, 'rerun-failed', 'Re-run Failed Tests'));
             if (state.running) {
                 const stopButton = rowAction('codicon-debug-stop', 'Stop Current Run', () => post('stopRun'));
+                stopButton.classList.add('stop-run');
                 right.appendChild(withInternalTooltip(stopButton, 'stop-run', 'Stop Current Run'));
             }
             summaryEl.append(left, right);

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { InlineTestBridge } from './inlineTestBridge';
 import { SuiteResult, TestCaseResult } from './surefireParser';
+import { testCaseResultFingerprint } from './resultPublication';
 
 // Pattern to detect JUnit "expected:<X> but was:<Y>" assertion failures
 const ASSERTION_DIFF_PATTERN = /expected:\s*<(.+?)>\s+but was:\s*<(.+?)>/i;
@@ -27,6 +28,7 @@ export function publishResults(
     persist?: boolean,
     existingRun?: vscode.TestRun,
     sharedInvocationCounts?: Map<string, number>,
+    publishedResultFingerprints?: Map<string, string>,
 ): Set<string> {
     const resolvedItemIds = new Set<string>();
     const ownRun = existingRun === undefined;
@@ -50,9 +52,19 @@ export function publishResults(
         // suppressed — each unique classname#method is only reported once per run.
         // For standalone calls (external watcher), create a fresh per-file map.
         const invocationCounts = sharedInvocationCounts ?? new Map<string, number>();
+        const publicationCounts = new Map<string, number>();
         for (const suite of suiteResults) {
             for (const tc of suite.testCases) {
-                const item = reportTestCase(run, inlineBridge, suite, tc, outputChannel, invocationCounts);
+                const item = reportTestCase(
+                    run,
+                    inlineBridge,
+                    suite,
+                    tc,
+                    outputChannel,
+                    invocationCounts,
+                    publicationCounts,
+                    publishedResultFingerprints,
+                );
                 if (item) { resolvedItemIds.add(item.id); }
                 if (tc.synthetic) { continue; }
                 switch (tc.status) {
@@ -89,6 +101,8 @@ function reportTestCase(
     tc: TestCaseResult,
     outputChannel: vscode.OutputChannel,
     invocationCounts: Map<string, number>,
+    publicationCounts: Map<string, number>,
+    publishedResultFingerprints?: Map<string, string>,
 ): vscode.TestItem | undefined {
     // For @TestFactory: the same method name appears multiple times in the XML.
     // Track invocation count and suffix with [N] for N > 1 so each dynamic
@@ -105,6 +119,14 @@ function reportTestCase(
     const count = (invocationCounts.get(baseKey) ?? 0) + 1;
     invocationCounts.set(baseKey, count);
     const effectiveName = count > 1 ? `${tc.methodName}[${count}]` : tc.methodName;
+    const publicationBaseKey = `${suite.xmlPath}\0${baseKey}`;
+    const publicationCount = (publicationCounts.get(publicationBaseKey) ?? 0) + 1;
+    publicationCounts.set(publicationBaseKey, publicationCount);
+    const publicationKey = `${publicationBaseKey}\0${publicationCount}`;
+    const fingerprint = testCaseResultFingerprint(tc);
+    if (publishedResultFingerprints?.get(publicationKey) === fingerprint) {
+        return undefined;
+    }
 
     // Resolve the target TestItem:
     //  1. Static method item (preferred — has URI + range for navigation).
@@ -166,6 +188,8 @@ function reportTestCase(
             break;
         }
     }
+
+    publishedResultFingerprints?.set(publicationKey, fingerprint);
 
     return item;
 }

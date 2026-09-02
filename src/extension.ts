@@ -58,7 +58,9 @@ import {
     OUTPUT_CHANNEL_NAME,
     RUN_PROFILE_LABEL,
 } from './constants';
-import { clearHistory, loadHistory, saveRunToHistory, trimHistory } from './runHistory';
+import { clearHistory, loadHistory, saveRunToHistory, trimHistory, type RunHistoryEntry } from './runHistory';
+import { resolveRunResultView } from './runResultView';
+import { statusFilterFacets } from './statusFilter';
 import {
     buildCustomTree,
     CustomSortDirection,
@@ -113,6 +115,7 @@ let running = false;
 let activeCancellationSource: vscode.CancellationTokenSource | undefined;
 let runtimeRunningNodeIds = new Set<string>();
 let runtimeResultByXmlPath = new Map<string, SuiteResult>();
+let activeHistoryEntryDuringRun: RunHistoryEntry | undefined;
 let runStartedAt: number | undefined;
 let lastRunDurationMs: number | undefined;
 let lastRunResults: SuiteResult[] = [];
@@ -241,13 +244,19 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
 }
 
 function rebuildTree(): void {
+    const resultView = resolveRunResultView(
+        Array.from(resultCache.values()),
+        Array.from(runtimeResultByXmlPath.values()),
+        runtimeRunningNodeIds,
+        running ? activeHistoryEntryDuringRun?.suiteResults : undefined,
+    );
     currentTree = buildCustomTree(
         modulesWithClasses,
-        Array.from(resultCache.values()),
+        resultView.baseResults,
         activeFilterExpression,
         {
-            runningNodeIds: runtimeRunningNodeIds,
-            suiteResults: Array.from(runtimeResultByXmlPath.values()),
+            runningNodeIds: resultView.runningNodeIds,
+            suiteResults: resultView.runtimeResults,
             sortMode: activeSortMode,
             sortDirection: activeSortDirection,
         },
@@ -504,15 +513,14 @@ function collectProjectAnnotations(roots: readonly CustomTestNode[]): string[] {
 function collectFilterFacets(roots: readonly CustomTestNode[]): string[][] {
     const facets: string[][] = [];
     const visitNode = (node: CustomTestNode): void => {
-        const isTestCase = (node.kind === 'method' || node.kind === 'virtualMethod')
+        const isTestCase = (node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle')
             && !node.hasVirtualInvocations;
         if (isTestCase) {
             const values = new Set<string>();
-            if (node.status === 'failed' || node.status === 'error') {
-                values.add('@failed');
-            }
-            if (node.status !== 'unknown') {
-                values.add('@executed');
+            if (node.counted !== false) {
+                for (const facet of statusFilterFacets(node.status)) {
+                    values.add(facet);
+                }
             }
             for (const tag of new Set(node.tags)) {
                 values.add(`@${projectTagNamespace(node)}.${tag}`);
@@ -642,6 +650,7 @@ async function runTargets(
         `[Runner] Scope: ${executionTargets.length} Maven execution(s), ${currentModules.length} discovered module(s), ${executionTargets.reduce((sum, target) => sum + target.expectedTestCount, 0)} test(s): ${executionTargets.map((target) => target.module.moduleDir).join(', ')}`,
     );
     running = true;
+    activeHistoryEntryDuringRun = undefined;
     runtimeRunningNodeIds = new Set(executionTargets.flatMap((target) => target.runningNodeIds ?? []));
     runtimeResultByXmlPath = new Map();
     runStartedAt = Date.now();
@@ -666,6 +675,7 @@ async function runTargets(
         historyLabel,
         true,
     );
+    const inlinePublishedResultFingerprints = new Map<string, string>();
     for (const item of inlineItems) {
         inlineRun.enqueued(item);
         inlineRun.started(item);
@@ -706,6 +716,19 @@ async function runTargets(
             const poller = startRuntimeReportPolling(
                 target.scopeModules.map((module) => module.moduleDir),
                 settings.reportGlobs,
+                (runtimeResults) => {
+                    publishResults(
+                        undefined,
+                        inlineTestBridge,
+                        runtimeResults,
+                        outputChannel,
+                        undefined,
+                        false,
+                        inlineRun,
+                        new Map<string, number>(),
+                        inlinePublishedResultFingerprints,
+                    );
+                },
             );
             try {
                 const result = await runMaven(
@@ -790,6 +813,8 @@ async function runTargets(
                     undefined,
                     false,
                     inlineRun,
+                    new Map<string, number>(),
+                    inlinePublishedResultFingerprints,
                 );
                 inlineResultFingerprint = inlineResultsFingerprint(Array.from(resultCache.values()));
             }
@@ -799,6 +824,7 @@ async function runTargets(
             lastRunResults = [...allResults];
             lastRunCancelled = cancelled;
             lastRunFailed = determineRunOutcome(cancelled, executions) === 'failed';
+            activeHistoryEntryDuringRun = undefined;
             running = false;
             runStartedAt = undefined;
             currentRunClasses.clear();
@@ -1050,6 +1076,7 @@ function collectSubtreeNodeIds(node: CustomTestNode): string[] {
 function startRuntimeReportPolling(
     moduleDirs: readonly string[],
     reportGlobs: readonly string[],
+    onResultsChanged?: (suiteResults: readonly SuiteResult[]) => void,
 ): { flush(): void; dispose(): void } {
     const seenMtimes = new Map<string, number>();
     for (const xmlPath of moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs))) {
@@ -1073,6 +1100,7 @@ function startRuntimeReportPolling(
         }
         if (changed) {
             rebuildTree();
+            onResultsChanged?.(Array.from(runtimeResultByXmlPath.values()));
         }
     };
 
@@ -1296,6 +1324,7 @@ function metadataPartDescription(part: TestMetadataPart): string {
 }
 
 async function clearResults(context: vscode.ExtensionContext, withHistory: boolean): Promise<void> {
+    activeHistoryEntryDuringRun = undefined;
     resultCache.clear();
     lastFailedClassTargets.clear();
     lastRunResults = [];
@@ -1317,22 +1346,104 @@ async function clearResults(context: vscode.ExtensionContext, withHistory: boole
 }
 
 async function showHistory(context: vscode.ExtensionContext): Promise<void> {
-    const history = loadHistory(context);
-    if (history.length === 0) {
+    let history = loadHistory(context);
+    if (history.length === 0 && !running) {
         vscode.window.showInformationMessage('Maven Test Explorer: No run history yet.');
         return;
     }
-    const selected = await vscode.window.showQuickPick(
-        history.map((entry) => ({
+    interface HistoryQuickPickItem extends vscode.QuickPickItem {
+        readonly currentRun?: boolean;
+        readonly entry?: RunHistoryEntry;
+    }
+    const currentRunIconPath = {
+        light: vscode.Uri.joinPath(context.extensionUri, 'media', 'current-run-sync-light.svg'),
+        dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'current-run-sync-dark.svg'),
+    };
+    const buildItems = (): HistoryQuickPickItem[] => {
+        const items: HistoryQuickPickItem[] = [];
+        if (running) {
+            items.push({
+                label: 'Current run',
+                description: 'Live test results',
+                iconPath: currentRunIconPath,
+                alwaysShow: true,
+                currentRun: true,
+            });
+            if (history.length > 0) {
+                items.push({
+                    label: 'Run history',
+                    kind: vscode.QuickPickItemKind.Separator,
+                });
+            }
+        }
+        items.push(...history.map((entry) => ({
             label: entry.label,
             description: entry.executions?.some((execution) => execution.exitCode !== 0)
                 ? `${entry.source} · Maven exit ${entry.executions.filter((execution) => execution.exitCode !== 0).map((execution) => execution.exitCode).join(', ')}`
                 : entry.source,
             entry,
-        })),
-        { title: 'Maven Test Run History', placeHolder: 'Select a run to restore its results' },
-    );
+        })));
+        return items;
+    };
+    const picker = vscode.window.createQuickPick<HistoryQuickPickItem>();
+    picker.title = 'Maven Test Run History';
+    picker.placeholder = 'Select a run to restore its results';
+    picker.items = buildItems();
+    const selected = await new Promise<HistoryQuickPickItem | undefined>((resolve) => {
+        let timer: ReturnType<typeof setInterval> | undefined;
+        const refreshItems = () => {
+            if (running) {
+                return;
+            }
+            const active = picker.activeItems[0];
+            const activeKey = active?.currentRun ? 'current' : active?.entry?.id;
+            history = loadHistory(context);
+            const items = buildItems();
+            picker.items = items;
+            const nextActive = items.find((item) => (
+                activeKey === 'current' ? item.currentRun : item.entry?.id === activeKey
+            ));
+            if (nextActive) {
+                picker.activeItems = [nextActive];
+            }
+            if (timer) {
+                clearInterval(timer);
+                timer = undefined;
+            }
+        };
+        timer = running
+            ? setInterval(refreshItems, 350)
+            : undefined;
+        const disposables = [
+            picker.onDidAccept(() => {
+                resolve(picker.selectedItems[0] ?? picker.activeItems[0]);
+                picker.hide();
+            }),
+            picker.onDidHide(() => resolve(undefined)),
+        ];
+        picker.onDidHide(() => {
+            if (timer) {
+                clearInterval(timer);
+            }
+            for (const disposable of disposables) disposable.dispose();
+            picker.dispose();
+        });
+        picker.show();
+    });
     if (!selected) {
+        return;
+    }
+    if (selected.currentRun) {
+        activeHistoryEntryDuringRun = undefined;
+        rebuildTree();
+        return;
+    }
+    if (!selected.entry) {
+        return;
+    }
+    if (running) {
+        activeHistoryEntryDuringRun = selected.entry;
+        rebuildTree();
         return;
     }
     resultCache.clear();

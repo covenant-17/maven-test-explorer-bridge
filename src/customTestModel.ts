@@ -4,6 +4,8 @@ import { moduleItemId, resolveModuleForResult } from './mavenModule';
 import { buildFqcn, SourceAnnotation, TestClassInfo } from './javaTestScanner';
 import { SuiteResult, TestCaseResult, TestCaseStatus } from './surefireParser';
 import { parseFilterExpression, TestFilterExpression } from './filterExpression';
+import { matchesStatusFilter } from './statusFilter';
+import { filterTree } from './treeFilter';
 
 export type CustomNodeKind = 'module' | 'package' | 'class' | 'method' | 'virtualMethod' | 'lifecycle';
 export type CustomNodeStatus = TestCaseStatus | 'unknown';
@@ -215,7 +217,7 @@ export function buildCustomTree(
         roots,
         nodesById,
         filteredRoots,
-        stats: sumStats(roots.map((node) => node.stats)),
+        stats: sumStats(filteredRoots.map((node) => node.stats)),
         filterError,
     };
 }
@@ -403,16 +405,21 @@ function createResultOnlyClass(
 }
 
 function filterNodes(nodes: readonly CustomTestNode[], expression: TestFilterExpression): CustomTestNode[] {
-    const filtered: CustomTestNode[] = [];
-    for (const node of nodes) {
-        const childMatches = filterNodes(node.children, expression);
-        if (matchesNode(node, expression)) {
-            filtered.push(cloneNode(node, node.children));
-        } else if (childMatches.length > 0) {
-            filtered.push(cloneNode(node, childMatches));
-        }
+    return filterTree(
+        nodes,
+        (node) => node.children,
+        (node) => matchesNode(node, expression),
+        cloneFilteredNode,
+    );
+}
+
+function cloneFilteredNode(node: CustomTestNode, children: readonly CustomTestNode[]): CustomTestNode {
+    const clone = cloneNode(node, children);
+    if (children.length > 0) {
+        clone.stats = sumStats(children.map((child) => child.stats));
+        clone.status = aggregateStatus(clone.stats);
     }
-    return filtered;
+    return clone;
 }
 
 function matchesNode(node: CustomTestNode, expression: TestFilterExpression): boolean {
@@ -433,11 +440,11 @@ function matchesTerm(node: CustomTestNode, rawTerm: string): boolean {
     }
     if (term.startsWith('@')) {
         const normalized = normalizeTag(term.substring(1));
-        const tags = new Set(node.tags.map(normalizeTag));
-        const statusTags = statusAliases(node.status);
-        if (statusTags.has(normalized)) {
-            return true;
+        const statusMatch = matchesStatusFilter(node.status, node.stats, normalized);
+        if (statusMatch !== undefined) {
+            return statusMatch;
         }
+        const tags = new Set(node.tags.map(normalizeTag));
         const namespacePrefix = `${path.basename(node.moduleDir).toLocaleLowerCase()}.`;
         const annotationPrefix = `${namespacePrefix}annotation.`;
         if (normalized.startsWith(annotationPrefix)) {
@@ -743,23 +750,6 @@ function visit(node: CustomTestNode, callback: (node: CustomTestNode) => void): 
     for (const child of node.children) {
         visit(child, callback);
     }
-}
-
-function statusAliases(status: CustomNodeStatus): Set<string> {
-    const aliases = new Set<string>();
-    if (status === 'unknown') {
-        return aliases;
-    }
-    aliases.add(`status.${status}`);
-    aliases.add(status);
-    aliases.add(`maventestexplorer:status.${status}`);
-    aliases.add('executed');
-    if (status === 'error') {
-        aliases.add('status.failed');
-        aliases.add('failed');
-        aliases.add('maventestexplorer:status.failed');
-    }
-    return aliases;
 }
 
 function normalizeTag(value: string): string {

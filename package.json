@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",

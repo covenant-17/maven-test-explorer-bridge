@@ -1,0 +1,1 @@
+export const RUNNING_SPINNER_CYCLE_MS = 2400;

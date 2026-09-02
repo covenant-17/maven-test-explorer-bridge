@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.9] - 2026-09-02
+
+### Added
+
+- Added a pinned **Current run** entry to Run History while Maven is active, allowing restored history snapshots to switch back to the latest live loaders and results.
+- Published completed Surefire results to the inline Testing API during active runs so failure diagnostics can appear before the entire Maven execution finishes.
+
+### Fixed
+
+- Made status filters prune non-matching descendants and aggregate passed, failed, errored, and skipped state across classes, packages, and projects.
+- Made status suggestion counts reflect the selected run-history snapshot for every supported result status.
+- Matched the in-view Stop Current Run button to VS Code's standard red stop action.
+
+---
+
 ## [1.0.8] - 2026-08-25
 
 ### Fixed

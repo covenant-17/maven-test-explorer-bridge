@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.7-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.9-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -23,15 +23,15 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
 - **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
-- **Run History** — store and restore completed, failed, or cancelled result sets per workspace; retention is configurable from 1 to 100 entries.
+- **Run History** — store and restore completed, failed, or cancelled result sets per workspace, or switch back to the pinned current run while Maven is active.
 - **Re-run Failed** — rerun failed or errored classes in the exact Maven module that produced each report.
-- **Flexible filtering** — combine text, status, JUnit tag, and string-annotation terms with AND/OR expressions.
+- **Flexible filtering** — combine text, aggregate result status, JUnit tag, and string-annotation terms with AND/OR expressions.
 - **Maven/JUnit selector search** — paste `Class#method` or `fully.qualified.Class#method` to find a specific test method.
 - **Flexible sorting** — sort by source location, name, status, or duration in ascending or descending order.
 - **Configurable rows** — independently choose visible Tree/List row parts and metadata while retaining the required expander.
 - **Context actions and multi-selection** — run selected nodes or copy Maven commands, packages, FQCNs, paths, and method names.
 - **Source navigation** — open discovered methods, lifecycle errors, inherited declarations, or concrete implementation classes.
-- **Inline Testing API bridge** — keep editor gutter runs, result messages, error peek, and reveal actions connected to the custom explorer.
+- **Inline Testing API bridge** — keep editor gutter runs, live failure messages, error peek, and reveal actions connected to the custom explorer.
 
 ## Requirements
 
@@ -83,7 +83,7 @@ The filter retains matching ancestors so that results remain navigable. Type `@`
 | Text, class, package, or method search | `AudiencesBotsAddBotTest` |
 | Maven/JUnit class-method selector | `AudiencesBotsAddBotTest#shouldAddBotByUsername` |
 | Project-scoped JUnit tag | `@javatest.smoke` |
-| Status | `@failed`, `@error`, `@skipped`, or `@executed` |
+| Status | `@passed`, `@failed`, `@error`, `@skipped`, or `@executed` |
 | Annotation name | `@javatest.annotation.knownissue` |
 | Annotation value contains text | `@javatest.annotation.knownissue=TEST-4` |
 | Annotation value equals text | `@javatest.annotation.knownissue="TEST-401"` |
@@ -157,6 +157,8 @@ When horizontal space is limited, metadata is truncated first, followed by durat
 |---|---|---|
 | `mavenTestExplorer.runHistoryEnabled` | `true` | Save newly completed or cancelled runs in workspace storage |
 | `mavenTestExplorer.maxHistoryEntries` | `20` | Keep the newest 1–100 history entries |
+
+While Maven is running, **Maven: Show Run History** pins **Current run** above stored snapshots. Selecting it restores the latest partial results and loader state. If the run finishes while an older snapshot is visible, the explorer automatically returns to the completed result.
 
 ## How It Works
 
