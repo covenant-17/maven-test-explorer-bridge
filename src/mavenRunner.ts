@@ -103,7 +103,7 @@ export function runMaven(
                         parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
                     }
                     outputChannel.appendLine(
-                        `[Progress] ${parts.join('  ')}  ${formatProgressDateTime(new Date())}`,
+                        `[Test Progress] ${parts.join('  ')}  ${formatProgressDateTime(new Date())}`,
                     );
                     progressHandlers?.onClassCompleted?.(m[5]);
                 }
