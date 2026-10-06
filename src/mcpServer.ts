@@ -64,6 +64,20 @@ server.registerTool('maven_tests_get_output', {
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 }, async (input) => toolCall('get_output', input));
 
+server.registerTool('maven_tests_wait', {
+    title: 'Wait for Maven tests',
+    description: 'Wait for a managed Maven test run to finish. A timeout reports the current snapshot and does not cancel Maven.',
+    inputSchema: {
+        runId: z.string().min(1),
+        timeoutSeconds: z.number().int().min(1),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+}, async (input) => toolCall(
+    'wait_for_run',
+    input,
+    input.timeoutSeconds * 1000 + 2_000,
+));
+
 server.registerTool('maven_tests_stop', {
     title: 'Stop Maven tests',
     description: 'Cancel the active Maven test run and terminate its Maven/JVM process tree.',
@@ -76,9 +90,13 @@ void server.connect(new StdioServerTransport()).catch((error: unknown) => {
     process.exitCode = 1;
 });
 
-async function toolCall(operation: Parameters<typeof callAgentBridge>[1], params?: unknown) {
+async function toolCall(
+    operation: Parameters<typeof callAgentBridge>[1],
+    params?: unknown,
+    responseTimeoutMs?: number,
+) {
     try {
-        const result = await callAgentBridge(workspace, operation, params, session);
+        const result = await callAgentBridge(workspace, operation, params, session, responseTimeoutMs);
         return {
             structuredContent: asRecord(result),
             content: [{ type: 'text' as const, text: JSON.stringify(result) }],

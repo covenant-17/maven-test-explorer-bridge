@@ -22,6 +22,7 @@ export async function callAgentBridge(
     operation: AgentOperation,
     params?: unknown,
     sessionId?: string,
+    responseTimeoutMs = 10_000,
 ): Promise<unknown> {
     const descriptors = findDescriptors(workspace).filter((entry) => !sessionId || entry.sessionId === sessionId);
     if (descriptors.length === 0) {
@@ -39,7 +40,7 @@ export async function callAgentBridge(
         operation,
         params,
     };
-    const response = await exchange(descriptor.endpoint, request);
+    const response = await exchange(descriptor.endpoint, request, responseTimeoutMs);
     if (!response.ok) {
         throw new AgentClientError(
             response.error?.code ?? 'INTERNAL_ERROR',
@@ -70,14 +71,14 @@ export function findDescriptors(workspace: string): AgentBridgeDescriptor[] {
     return descriptors.sort((left, right) => right.createdAt - left.createdAt);
 }
 
-function exchange(endpoint: string, request: AgentRequest): Promise<AgentResponse> {
+function exchange(endpoint: string, request: AgentRequest, responseTimeoutMs: number): Promise<AgentResponse> {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(endpoint);
         let buffer = '';
         const timer = setTimeout(() => {
             socket.destroy();
-            reject(new AgentClientError('BRIDGE_TIMEOUT', 'Agent Bridge did not respond within 10 seconds.'));
-        }, 10_000);
+            reject(new AgentClientError('BRIDGE_TIMEOUT', `Agent Bridge did not respond within ${responseTimeoutMs} ms.`));
+        }, responseTimeoutMs);
         socket.setEncoding('utf8');
         socket.once('connect', () => socket.write(`${JSON.stringify(request)}\n`));
         socket.on('data', (chunk: string) => {

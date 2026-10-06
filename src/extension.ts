@@ -91,7 +91,6 @@ import {
 import {
     AgentConfigurationSnapshot,
     AgentRequest,
-    AgentRunStats,
     AgentStartRunRequest,
     RunSource,
     validateStartRunRequest,
@@ -99,6 +98,8 @@ import {
 import { AgentBridgeServer, removeStaleDescriptors } from './agentBridgeServer';
 import { bridgeError, RunCoordinator } from './runCoordinator';
 import { buildAgentSetupPacket } from './agentSetup';
+import { summarizeAgentRun } from './agentRunResults';
+import { ReportChangeTracker } from './reportChangeTracker';
 
 interface RunTarget {
     module: MavenModule;
@@ -689,11 +690,18 @@ async function runTargets(
         expectedTestCount: target.expectedTestCount ?? expectedTestCount(target.runningNodeIds ?? []),
     }));
     const baseSettings = readSettings();
+    const defaultCommand = invocation.source === 'agent'
+        ? baseSettings.agentDefaultCommand
+        : baseSettings.defaultCommand;
     const settings = {
         ...baseSettings,
         defaultProfiles: invocation.profiles ?? baseSettings.defaultProfiles,
-        defaultCommand: invocation.goals?.join(' ') ?? baseSettings.defaultCommand,
+        defaultCommand: invocation.goals?.join(' ') ?? defaultCommand,
     };
+    const cleanReports = invocation.cleanReports
+        ?? (invocation.source === 'agent'
+            ? settings.agentClearReportsBeforeRun
+            : settings.clearReportsBeforeRun);
     if (settings.showOutputChannel) {
         outputChannel.show(true);
     }
@@ -739,7 +747,7 @@ async function runTargets(
 
     try {
         for (const target of executionTargets) {
-            if (invocation.cleanReports ?? settings.clearReportsBeforeRun) {
+            if (cleanReports) {
                 for (const scopeModule of target.scopeModules) {
                     clearReportDirectories(scopeModule.moduleDir, settings.reportGlobs);
                     outputChannel.appendLine(`[Runner] Cleared reports in: ${scopeModule.moduleDir}`);
@@ -779,7 +787,7 @@ async function runTargets(
                 target.scopeModules.map((module) => module.moduleDir),
                 settings.reportGlobs,
                 (runtimeResults) => {
-                    runCoordinator.setStats(statsForSuites([...allResults, ...runtimeResults]));
+                    updateCoordinatorResults(mergeSuiteResults(allResults, runtimeResults));
                     publishResults(
                         undefined,
                         inlineTestBridge,
@@ -826,14 +834,12 @@ async function runTargets(
                     exitCode: result.exitCode,
                 });
                 cancelled = cancelled || result.cancelled;
-                const reportedResults = target.scopeModules.flatMap((module) =>
-                    readAllReports(module.moduleDir, settings.reportGlobs),
-                );
+                const reportedResults = poller.results();
                 const suiteResults = result.cancelled
                     ? reportedResults
                     : addSkippedResultsForLifecycleFailures(reportedResults, target.runningNodeIds ?? []);
                 allResults.push(...suiteResults);
-                runCoordinator.setStats(statsForSuites(allResults));
+                updateCoordinatorResults(allResults);
                 if (!result.cancelled && result.exitCode !== 0 && reportedResults.length === 0) {
                     markTargetInfrastructureFailure(inlineRun, target, result.exitCode);
                 }
@@ -900,7 +906,7 @@ async function runTargets(
             lastRunCancelled = cancelled;
             const outcome = determineRunOutcome(cancelled, executions);
             lastRunFailed = outcome === 'failed';
-            runCoordinator.setStats(statsForSuites(allResults));
+            updateCoordinatorResults(allResults);
             runCoordinator.finish(outcome);
             activeHistoryEntryDuringRun = undefined;
             running = false;
@@ -1069,18 +1075,18 @@ function calculateSuiteTiming(suiteResults: readonly SuiteResult[]): {
     };
 }
 
-function statsForSuites(suiteResults: readonly SuiteResult[]): AgentRunStats {
-    const stats = { passed: 0, failed: 0, errors: 0, skipped: 0 };
-    for (const suite of suiteResults) {
-        for (const testCase of suite.testCases) {
-            if (testCase.synthetic) continue;
-            if (testCase.status === 'passed') stats.passed++;
-            else if (testCase.status === 'failed') stats.failed++;
-            else if (testCase.status === 'error') stats.errors++;
-            else if (testCase.status === 'skipped') stats.skipped++;
-        }
-    }
-    return stats;
+function updateCoordinatorResults(suiteResults: readonly SuiteResult[]): void {
+    const summary = summarizeAgentRun(suiteResults);
+    runCoordinator.setResults(summary.stats, summary.failures);
+}
+
+function mergeSuiteResults(
+    completed: readonly SuiteResult[],
+    runtime: readonly SuiteResult[],
+): SuiteResult[] {
+    const byPath = new Map(completed.map((suite) => [suite.xmlPath, suite]));
+    for (const suite of runtime) byPath.set(suite.xmlPath, suite);
+    return Array.from(byPath.values());
 }
 
 async function handleAgentRequest(context: vscode.ExtensionContext, request: AgentRequest): Promise<unknown> {
@@ -1093,6 +1099,18 @@ async function handleAgentRequest(context: vscode.ExtensionContext, request: Age
             const params = asRecord(request.params);
             const tailLines = typeof params.tailLines === 'number' ? params.tailLines : 200;
             return runCoordinator.getOutput(typeof params.runId === 'string' ? params.runId : undefined, tailLines);
+        }
+        case 'wait_for_run': {
+            const params = asRecord(request.params);
+            if (typeof params.runId !== 'string' || params.runId.trim().length === 0) {
+                throw bridgeError('INVALID_REQUEST', 'runId is required.');
+            }
+            if (typeof params.timeoutSeconds !== 'number'
+                || !Number.isInteger(params.timeoutSeconds)
+                || params.timeoutSeconds < 1) {
+                throw bridgeError('INVALID_REQUEST', 'timeoutSeconds must be a positive integer.');
+            }
+            return runCoordinator.waitForRun(params.runId, params.timeoutSeconds * 1000);
         }
         case 'stop_run': {
             const params = asRecord(request.params);
@@ -1145,10 +1163,10 @@ function agentConfiguration(): AgentConfigurationSnapshot {
             moduleDir: module.moduleDir,
         })),
         defaults: {
-            goals: settings.defaultCommand.split(/\s+/).filter(Boolean),
+            goals: settings.agentDefaultCommand.split(/\s+/).filter(Boolean),
             profiles: [...settings.defaultProfiles],
             additionalArgs: settings.additionalArgs,
-            cleanReports: settings.clearReportsBeforeRun,
+            cleanReports: settings.agentClearReportsBeforeRun,
         },
     };
 }
@@ -1361,24 +1379,21 @@ function startRuntimeReportPolling(
     moduleDirs: readonly string[],
     reportGlobs: readonly string[],
     onResultsChanged?: (suiteResults: readonly SuiteResult[]) => void,
-): { flush(): void; dispose(): void } {
-    const seenMtimes = new Map<string, number>();
-    for (const xmlPath of moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs))) {
-        seenMtimes.set(xmlPath, fileMtimeMs(xmlPath));
-    }
+): { flush(): void; results(): SuiteResult[]; dispose(): void } {
+    const changedResults = new Map<string, SuiteResult>();
+    const initialPaths = moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs));
+    const tracker = new ReportChangeTracker(initialPaths);
 
     const scan = () => {
         let changed = false;
-        for (const xmlPath of moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs))) {
-            const mtimeMs = fileMtimeMs(xmlPath);
-            if (seenMtimes.get(xmlPath) === mtimeMs) {
-                continue;
-            }
+        const reportPaths = moduleDirs.flatMap((moduleDir) => listReportFiles(moduleDir, reportGlobs));
+        for (const xmlPath of tracker.changedFiles(reportPaths)) {
             const result = parseReportFile(xmlPath);
             if (!result) {
                 continue;
             }
-            seenMtimes.set(xmlPath, mtimeMs);
+            tracker.markSeen(xmlPath);
+            changedResults.set(result.xmlPath, result);
             runtimeResultByXmlPath.set(result.xmlPath, result);
             changed = true;
         }
@@ -1391,6 +1406,7 @@ function startRuntimeReportPolling(
     const timer = setInterval(scan, 350);
     return {
         flush: scan,
+        results: () => Array.from(changedResults.values()),
         dispose: () => clearInterval(timer),
     };
 }
@@ -1411,14 +1427,6 @@ function listReportFiles(moduleDir: string, reportGlobs: readonly string[]): str
         }
     }
     return files.sort((a, b) => a.localeCompare(b));
-}
-
-function fileMtimeMs(filePath: string): number {
-    try {
-        return fs.statSync(filePath).mtimeMs;
-    } catch {
-        return -1;
-    }
 }
 
 function registerCommands(context: vscode.ExtensionContext): void {

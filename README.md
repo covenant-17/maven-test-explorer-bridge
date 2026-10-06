@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.10-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -131,9 +131,11 @@ VS Code may prefix these titles with the **Maven Test Explorer** command categor
 | Setting | Default | Purpose |
 |---|---|---|
 | `mavenTestExplorer.defaultCommand` | `"clean test"` | Goals used by Run All |
+| `mavenTestExplorer.agentDefaultCommand` | `"test"` | Safe default goals used by Agent Bridge all-scope runs |
 | `mavenTestExplorer.defaultProfiles` | `[]` | Profiles added to every Maven invocation |
 | `mavenTestExplorer.additionalArgs` | `""` | Extra arguments added to every Maven invocation |
 | `mavenTestExplorer.clearReportsBeforeRun` | `true` | Remove old matching XML reports before an extension-started run |
+| `mavenTestExplorer.agentClearReportsBeforeRun` | `false` | Preserve existing XML reports for Agent Bridge runs unless explicitly overridden |
 | `mavenTestExplorer.testClassCommandTemplate` | `"{maven} {profiles} {args} -Dtest={className} test"` | Template for class, method, grouped, and failed-test runs |
 
 The class command template supports `{maven}`, `{profiles}`, `{args}`, `{className}`, and `{methodName}` placeholders. The default grouped selector is passed through `{className}`.
@@ -169,23 +171,30 @@ The Agent Bridge exposes the extension's existing Maven runner to local coding a
 CLI examples (replace `mteb-cli.cjs` with the copied installed path):
 
 ```powershell
+node mteb-cli.cjs --help
 node mteb-cli.cjs status --workspace . --json
 node mteb-cli.cjs config --workspace . --json
-node mteb-cli.cjs run --workspace . --goal test --profile parallel --property HEADLESS=true --clean-reports --json
+node mteb-cli.cjs run --workspace . --goal test --profile parallel --property HEADLESS=true --json
 node mteb-cli.cjs run --workspace . --test LoginTest --test ProfileMenuNavigationTest --property HEADLESS=true --json
+node mteb-cli.cjs wait --workspace . --run <run-id> --timeout 300 --json
 node mteb-cli.cjs output --workspace . --run <run-id> --tail 200 --json
 node mteb-cli.cjs stop --workspace . --run <run-id> --json
 ```
+
+Running the CLI without arguments, with `--help`, or as `<command> --help` prints the complete command and option reference. Agent Bridge defaults are intentionally separate from interactive UI defaults: agents use `test` and preserve existing reports unless the request or workspace configuration explicitly opts into cleanup. Preserved reports remain on disk, while only XML files created or changed during the managed run contribute to that run's result.
 
 The bundled stdio MCP server provides these tools:
 
 - `maven_tests_get_status`
 - `maven_tests_get_configuration`
 - `maven_tests_start`
+- `maven_tests_wait`
 - `maven_tests_get_output`
 - `maven_tests_stop`
 
-Agents should always check status before starting tests. Only one managed run is accepted at a time. Runs started directly with `mvn` remain unmanaged: their Surefire/Failsafe XML results are still imported, but the extension cannot report their PID, command, exit code, output, or cancellation state.
+Agents should always check status before starting tests. Only one managed run is accepted at a time. `maven_tests_wait` blocks until the requested run completes or its timeout expires without cancelling Maven. Final snapshots expose `failures` entries as `{test, message}` for failed and errored cases and a ready-to-display `surefireSummary` line. Runs started directly with `mvn` remain unmanaged: their Surefire/Failsafe XML results are still imported, but the extension cannot report their PID, command, exit code, output, or cancellation state.
+
+The **Copy AI Agent Setup** toolbar action includes an upgrade section for existing installations. It tells agents to update their existing `AGENTS.md` or `CLAUDE.md` policy block with waiting, structured failure handling, and safe-default behavior without duplicating the block.
 
 ## How It Works
 

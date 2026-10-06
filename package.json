@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
-  "version": "1.0.10",
+  "version": "1.1.0",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -471,6 +471,11 @@
             "default": "clean test",
             "description": "Maven goals used by Run All Tests, for example 'clean test'. Class, method, and grouped runs use Test Class Command Template instead."
           },
+          "mavenTestExplorer.agentDefaultCommand": {
+            "type": "string",
+            "default": "test",
+            "description": "Maven goals used by Agent Bridge all-scope runs when the agent does not supply goals. Kept separate from Default Command so automated runs do not clean build output by default."
+          },
           "mavenTestExplorer.defaultProfiles": {
             "type": "array",
             "items": { "type": "string" },
@@ -486,6 +491,11 @@
             "type": "boolean",
             "default": true,
             "description": "Delete existing TEST-*.xml files from the configured report locations before a run, preventing stale XML from appearing as results of the new run."
+          },
+          "mavenTestExplorer.agentClearReportsBeforeRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "Delete existing TEST-*.xml files before Agent Bridge runs when the agent does not explicitly choose report-cleaning behavior. Disabled by default to preserve reports from earlier full runs."
           },
           "mavenTestExplorer.testClassCommandTemplate": {
             "type": "string",

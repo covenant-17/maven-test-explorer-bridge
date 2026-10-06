@@ -19,5 +19,12 @@ test('builds a self-explanatory Codex and Claude setup packet', () => {
     assert.match(packet, /"maven_tests"/);
     assert.match(packet, /maven_tests_get_status/);
     assert.match(packet, /node "C:\\Users\\Example User\\mteb-cli\.cjs" status/);
-    assert.match(packet, /run --workspace "C:\\!Dev\\sample project" --clean-reports --json/);
+    assert.match(packet, /run --workspace "C:\\!Dev\\sample project" --json/);
+    assert.doesNotMatch(packet, /run --workspace .* --clean-reports/);
+    assert.match(packet, /maven_tests_wait/);
+    assert.match(packet, /lastRun\.failures/);
+    assert.match(packet, /status `lastRun`/);
+    assert.match(packet, /`surefireSummary`/);
+    assert.match(packet, /UPDATE FOR EXISTING AGENT SETUPS/);
+    assert.match(packet, /wait --workspace "C:\\!Dev\\sample project" --run "<run-id>" --timeout 300 --json/);
 });

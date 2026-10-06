@@ -3,11 +3,13 @@ import {
     CONFIG_SECTION,
     CONFIG_MAVEN_EXECUTABLE,
     CONFIG_DEFAULT_COMMAND,
+    CONFIG_AGENT_DEFAULT_COMMAND,
     CONFIG_DEFAULT_PROFILES,
     CONFIG_ADDITIONAL_ARGS,
     CONFIG_REPORT_GLOBS,
     CONFIG_WATCH_REPORTS,
     CONFIG_CLEAR_REPORTS_BEFORE_RUN,
+    CONFIG_AGENT_CLEAR_REPORTS_BEFORE_RUN,
     CONFIG_TEST_CLASS_COMMAND_TEMPLATE,
     CONFIG_SHOW_OUTPUT_CHANNEL,
     CONFIG_AUTO_REFRESH_ON_SAVE,
@@ -25,11 +27,13 @@ import {
 export interface ExtensionSettings {
     readonly mavenExecutable: string;
     readonly defaultCommand: string;
+    readonly agentDefaultCommand: string;
     readonly defaultProfiles: readonly string[];
     readonly additionalArgs: string;
     readonly reportGlobs: readonly string[];
     readonly watchReports: boolean;
     readonly clearReportsBeforeRun: boolean;
+    readonly agentClearReportsBeforeRun: boolean;
     readonly testClassCommandTemplate: string;
     readonly showOutputChannel: boolean;
     readonly autoRefreshOnSave: boolean;
@@ -45,11 +49,13 @@ export function readSettings(): ExtensionSettings {
     return {
         mavenExecutable: cfg.get<string>(CONFIG_MAVEN_EXECUTABLE, 'mvn'),
         defaultCommand: cfg.get<string>(CONFIG_DEFAULT_COMMAND, 'clean test'),
+        agentDefaultCommand: cfg.get<string>(CONFIG_AGENT_DEFAULT_COMMAND, 'test'),
         defaultProfiles: cfg.get<string[]>(CONFIG_DEFAULT_PROFILES, []),
         additionalArgs: cfg.get<string>(CONFIG_ADDITIONAL_ARGS, ''),
         reportGlobs: cfg.get<string[]>(CONFIG_REPORT_GLOBS, [SUREFIRE_GLOB, FAILSAFE_GLOB]),
         watchReports: cfg.get<boolean>(CONFIG_WATCH_REPORTS, true),
         clearReportsBeforeRun: cfg.get<boolean>(CONFIG_CLEAR_REPORTS_BEFORE_RUN, true),
+        agentClearReportsBeforeRun: cfg.get<boolean>(CONFIG_AGENT_CLEAR_REPORTS_BEFORE_RUN, false),
         testClassCommandTemplate: cfg.get<string>(CONFIG_TEST_CLASS_COMMAND_TEMPLATE, DEFAULT_CLASS_TEMPLATE),
         showOutputChannel: cfg.get<boolean>(CONFIG_SHOW_OUTPUT_CHANNEL, true),
         autoRefreshOnSave: cfg.get<boolean>(CONFIG_AUTO_REFRESH_ON_SAVE, true),

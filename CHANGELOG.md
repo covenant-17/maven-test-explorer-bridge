@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- Added complete CLI help, including per-command usage and every supported Agent Bridge option.
+- Added CLI `wait` and MCP `maven_tests_wait` operations for waiting on a managed run without polling or cancelling it on timeout.
+- Added structured failed/error test details and a ready-to-display Surefire summary to managed run snapshots.
+- Added separate safe Agent Bridge defaults for Maven goals and report cleanup.
+
+### Changed
+
+- Agent runs now default to `test` and preserve existing Surefire/Failsafe XML reports while counting only reports created or changed by the new run.
+- Expanded the toolbar's copied AI Agent Setup packet with upgrade instructions for existing `AGENTS.md` and `CLAUDE.md` integrations.
+
 ## [1.0.10] - 2026-10-06
 
 ### Added

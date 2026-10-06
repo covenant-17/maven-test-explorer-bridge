@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 
-export const AGENT_PROTOCOL_VERSION = 1;
+export const AGENT_PROTOCOL_VERSION = 2;
 export const OUTPUT_BUFFER_LIMIT = 1024 * 1024;
 
 export type RunSource = 'webview' | 'testing-api' | 'agent';
@@ -37,6 +37,11 @@ export interface AgentRunStats {
     readonly skipped: number;
 }
 
+export interface AgentRunFailure {
+    readonly test: string;
+    readonly message: string;
+}
+
 export interface ActiveRunSnapshot {
     readonly runId: string;
     readonly source: RunSource;
@@ -51,6 +56,8 @@ export interface ActiveRunSnapshot {
     readonly completedClasses: number;
     readonly totalClasses: number;
     readonly stats: AgentRunStats;
+    readonly failures: readonly AgentRunFailure[];
+    readonly surefireSummary: string;
 }
 
 export interface AgentConfigurationSnapshot {
@@ -75,7 +82,7 @@ export interface AgentBridgeDescriptor {
     readonly createdAt: number;
 }
 
-export type AgentOperation = 'get_status' | 'get_configuration' | 'start_run' | 'get_output' | 'stop_run';
+export type AgentOperation = 'get_status' | 'get_configuration' | 'start_run' | 'get_output' | 'wait_for_run' | 'stop_run';
 
 export interface AgentRequest {
     readonly id: string;

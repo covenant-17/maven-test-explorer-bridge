@@ -1,4 +1,11 @@
-import { ActiveRunSnapshot, AgentRunStats, ManagedRunStatus, OUTPUT_BUFFER_LIMIT, RunSource } from './agentProtocol';
+import {
+    ActiveRunSnapshot,
+    AgentRunFailure,
+    AgentRunStats,
+    ManagedRunStatus,
+    OUTPUT_BUFFER_LIMIT,
+    RunSource,
+} from './agentProtocol';
 
 interface MutableRun {
     runId: string;
@@ -14,13 +21,21 @@ interface MutableRun {
     completedClasses: Set<string>;
     totalClasses: number;
     stats: AgentRunStats;
+    failures: readonly AgentRunFailure[];
+    surefireSummary: string;
     output: string;
     outputTruncated: boolean;
+}
+
+interface RunWaiter {
+    readonly resolve: (run: ActiveRunSnapshot) => void;
+    readonly timer: ReturnType<typeof setTimeout>;
 }
 
 export class RunCoordinator {
     private active: MutableRun | undefined;
     private last: MutableRun | undefined;
+    private readonly waiters = new Map<string, Set<RunWaiter>>();
 
     start(source: RunSource, label: string, totalClasses: number): ActiveRunSnapshot {
         if (this.active) {
@@ -37,6 +52,8 @@ export class RunCoordinator {
             completedClasses: new Set(),
             totalClasses,
             stats: emptyStats(),
+            failures: [],
+            surefireSummary: formatSurefireSummary(emptyStats()),
             output: '',
             outputTruncated: false,
         };
@@ -74,8 +91,11 @@ export class RunCoordinator {
         this.active.completedClasses.add(className);
     }
 
-    setStats(stats: AgentRunStats): void {
-        if (this.active) this.active.stats = stats;
+    setResults(stats: AgentRunStats, failures: readonly AgentRunFailure[]): void {
+        if (!this.active) return;
+        this.active.stats = stats;
+        this.active.failures = failures.map((failure) => ({ ...failure }));
+        this.active.surefireSummary = formatSurefireSummary(stats);
     }
 
     finish(status: Exclude<ManagedRunStatus, 'running'>): ActiveRunSnapshot | undefined {
@@ -85,7 +105,16 @@ export class RunCoordinator {
         this.active.currentClasses.clear();
         this.last = this.active;
         this.active = undefined;
-        return this.snapshot(this.last);
+        const snapshot = this.snapshot(this.last);
+        const waiters = this.waiters.get(snapshot.runId);
+        if (waiters) {
+            this.waiters.delete(snapshot.runId);
+            for (const waiter of waiters) {
+                clearTimeout(waiter.timer);
+                waiter.resolve(snapshot);
+            }
+        }
+        return snapshot;
     }
 
     get activeRunId(): string | undefined {
@@ -98,6 +127,30 @@ export class RunCoordinator {
             run: this.active ? this.snapshot(this.active) : undefined,
             lastRun: this.last ? this.snapshot(this.last) : undefined,
         };
+    }
+
+    waitForRun(runId: string, timeoutMs: number): Promise<ActiveRunSnapshot> {
+        if (this.last?.runId === runId) {
+            return Promise.resolve(this.snapshot(this.last));
+        }
+        if (!this.active || this.active.runId !== runId) {
+            return Promise.reject(bridgeError('RUN_NOT_FOUND', 'The requested run was not found.'));
+        }
+        return new Promise((resolve, reject) => {
+            const waiter: RunWaiter = {
+                resolve,
+                timer: setTimeout(() => {
+                    const waiters = this.waiters.get(runId);
+                    waiters?.delete(waiter);
+                    if (waiters?.size === 0) this.waiters.delete(runId);
+                    const run = this.active?.runId === runId ? this.snapshot(this.active) : undefined;
+                    reject(bridgeError('RUN_WAIT_TIMEOUT', 'The Maven test run did not finish before the timeout.', { run }));
+                }, timeoutMs),
+            };
+            const waiters = this.waiters.get(runId) ?? new Set<RunWaiter>();
+            waiters.add(waiter);
+            this.waiters.set(runId, waiters);
+        });
     }
 
     getOutput(runId: string | undefined, tailLines = 200): { runId: string; output: string; truncated: boolean } {
@@ -142,6 +195,8 @@ export class RunCoordinator {
             completedClasses: run.completedClasses.size,
             totalClasses: run.totalClasses,
             stats: run.stats,
+            failures: run.failures.map((failure) => ({ ...failure })),
+            surefireSummary: run.surefireSummary,
         };
     }
 }
@@ -157,4 +212,9 @@ export function bridgeError(code: string, message: string, details?: unknown): B
 
 function emptyStats(): AgentRunStats {
     return { passed: 0, failed: 0, errors: 0, skipped: 0 };
+}
+
+function formatSurefireSummary(stats: AgentRunStats): string {
+    const total = stats.passed + stats.failed + stats.errors + stats.skipped;
+    return `Tests run: ${total}, Failures: ${stats.failed}, Errors: ${stats.errors}, Skipped: ${stats.skipped}`;
 }
