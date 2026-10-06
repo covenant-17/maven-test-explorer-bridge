@@ -2,7 +2,7 @@
   "name": "maven-test-explorer-bridge",
   "displayName": "Maven Test Explorer Bridge",
   "description": "Custom Maven/Surefire test explorer for the VS Code Testing sidebar.",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "publisher": "covenant-17",
   "license": "MIT",
   "icon": "icon-17-128.png",
@@ -11,7 +11,8 @@
     "url": "https://github.com/covenant-17/maven-test-explorer-bridge"
   },
   "engines": {
-    "vscode": "^1.84.0"
+    "vscode": "^1.84.0",
+    "node": ">=20"
   },
   "categories": [
     "Testing"
@@ -173,6 +174,12 @@
         "icon": "$(history)"
       },
       {
+        "command": "mavenTestExplorer.copyAgentSetup",
+        "title": "Copy AI Agent Setup",
+        "category": "Maven Test Explorer",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "mavenTestExplorer.revealInCustomExplorer",
         "title": "Reveal in Maven Test Explorer",
         "category": "Maven Test Explorer",
@@ -240,6 +247,11 @@
         {
           "submenu": "mavenTestExplorer.clearMenu",
           "group": "navigation@5",
+          "when": "view == mavenTestExplorer.view"
+        },
+        {
+          "command": "mavenTestExplorer.copyAgentSetup",
+          "group": "navigation@6",
           "when": "view == mavenTestExplorer.view"
         },
         {
@@ -586,6 +598,7 @@
     "vscode:prepublish": "npm run package"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.84.0",
     "esbuild": "^0.20.0",
@@ -593,6 +606,9 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "fast-xml-parser": "^4.3.0"
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "cross-spawn": "^7.0.6",
+    "fast-xml-parser": "^5.11.2",
+    "zod": "^4.6.5"
   }
 }

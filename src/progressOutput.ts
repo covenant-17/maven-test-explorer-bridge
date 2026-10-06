@@ -12,3 +12,23 @@ export function formatProgressDateTime(date: Date): string {
         twoDigits(date.getSeconds()),
     ].join(':');
 }
+
+/** Formats one scannable Maven progress line with explicit metric separators. */
+export function formatTestProgress(
+    passed: number,
+    failed: number,
+    skipped: number,
+    remaining: number | undefined,
+    date: Date,
+): string {
+    const parts = [
+        `✓ ${passed} passed`,
+        `✗ ${failed} failed`,
+        `⊘ ${skipped} skipped`,
+    ];
+    if (remaining !== undefined) {
+        parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
+    }
+    parts.push(formatProgressDateTime(date));
+    return `[Test Progress] ${parts.join(' │ ')}`;
+}

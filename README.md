@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.0.9-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.10-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -32,6 +32,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Context actions and multi-selection** — run selected nodes or copy Maven commands, packages, FQCNs, paths, and method names.
 - **Source navigation** — open discovered methods, lifecycle errors, inherited declarations, or concrete implementation classes.
 - **Inline Testing API bridge** — keep editor gutter runs, live failure messages, error peek, and reveal actions connected to the custom explorer.
+- **Agent Bridge** — let coding agents inspect, start, follow, and stop the same managed Maven run through JSON CLI or MCP tools.
 
 ## Requirements
 
@@ -40,6 +41,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - JUnit 5 tests in Java source files matched by `mavenTestExplorer.testSourceGlobs`
 - Maven Wrapper (`mvnw` / `mvnw.cmd`) in the module or its parent, or Maven available through `mavenTestExplorer.mavenExecutable`
 - Maven Surefire or Failsafe XML reports for result synchronization
+- Node.js 20 or newer when using the optional Agent Bridge CLI or MCP server
 
 ## Getting Started
 
@@ -159,6 +161,31 @@ When horizontal space is limited, metadata is truncated first, followed by durat
 | `mavenTestExplorer.maxHistoryEntries` | `20` | Keep the newest 1–100 history entries |
 
 While Maven is running, **Maven: Show Run History** pins **Current run** above stored snapshots. Selecting it restores the latest partial results and loader state. If the run finishes while an older snapshot is visible, the explorer automatically returns to the completed result.
+
+### Agent Bridge
+
+The Agent Bridge exposes the extension's existing Maven runner to local coding agents. The extension must be active in the target workspace; CLI and MCP never start a separate Maven process. Click **Copy AI Agent Setup** (the terminal icon in the Maven Test Explorer title toolbar) to copy a self-contained setup packet for Codex or Claude Code. The packet explains its purpose and includes workspace-scoped MCP configuration, an `AGENTS.md` / `CLAUDE.md` policy block, verification steps, and CLI fallback commands.
+
+CLI examples (replace `mteb-cli.cjs` with the copied installed path):
+
+```powershell
+node mteb-cli.cjs status --workspace . --json
+node mteb-cli.cjs config --workspace . --json
+node mteb-cli.cjs run --workspace . --goal test --profile parallel --property HEADLESS=true --clean-reports --json
+node mteb-cli.cjs run --workspace . --test LoginTest --test ProfileMenuNavigationTest --property HEADLESS=true --json
+node mteb-cli.cjs output --workspace . --run <run-id> --tail 200 --json
+node mteb-cli.cjs stop --workspace . --run <run-id> --json
+```
+
+The bundled stdio MCP server provides these tools:
+
+- `maven_tests_get_status`
+- `maven_tests_get_configuration`
+- `maven_tests_start`
+- `maven_tests_get_output`
+- `maven_tests_stop`
+
+Agents should always check status before starting tests. Only one managed run is accepted at a time. Runs started directly with `mvn` remain unmanaged: their Surefire/Failsafe XML results are still imported, but the extension cannot report their PID, command, exit code, output, or cancellation state.
 
 ## How It Works
 

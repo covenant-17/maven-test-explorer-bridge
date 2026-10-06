@@ -20,6 +20,9 @@ export interface WebviewRunSummary {
     readonly fixtureDurationMs?: number;
     readonly cancelled?: boolean;
     readonly failed?: boolean;
+    readonly source?: string;
+    readonly command?: readonly string[];
+    readonly pid?: number;
 }
 
 export interface WebviewState {
@@ -1431,6 +1434,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function runningTooltip(summary) {
             const currentClasses = summary?.currentClasses || [];
             const lines = [TOOLTIP_TITLE_PREFIX + 'Running now', TOOLTIP_SEPARATOR];
+            if (summary?.source) lines.push('Source: ' + summary.source);
+            if (summary?.pid) lines.push('PID: ' + summary.pid);
+            if (summary?.command?.length) lines.push('Command: ' + summary.command.join(' '));
+            if (summary?.source || summary?.pid || summary?.command?.length) lines.push(TOOLTIP_SEPARATOR);
             if (currentClasses.length > 0) {
                 lines.push(...currentClasses.map(className => className));
             } else {

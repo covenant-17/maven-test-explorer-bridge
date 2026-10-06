@@ -32,6 +32,8 @@ const XML_PARSER_OPTIONS = {
     allowBooleanAttributes: true,
     trimValues: true,
     parseTagValue: true,
+    // Preserve v4 behavior for numeric character references in report attributes.
+    htmlEntities: true,
     isArray: (tagName: string): boolean =>
         tagName === 'testcase' || tagName === 'failure' || tagName === 'error',
 } as const;

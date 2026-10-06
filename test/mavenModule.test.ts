@@ -37,6 +37,17 @@ test('parses a single or repeated Maven modules element', () => {
     assert.deepEqual(descriptor.modules, ['api', 'impl/pom.xml']);
 });
 
+test('decodes XML entities in Maven coordinates and module paths', () => {
+    const descriptor = parseMavenPom(`
+        <project>
+          <artifactId>reactor-&amp;-tools</artifactId>
+          <modules><module>api&amp;client</module></modules>
+        </project>
+    `);
+    assert.equal(descriptor.artifactId, 'reactor-&-tools');
+    assert.deepEqual(descriptor.modules, ['api&client']);
+});
+
 test('groups a nested Maven reactor into one top-level execution', () => {
     const rootDir = path.resolve('fixture/reactor');
     const apiDir = path.join(rootDir, 'api');

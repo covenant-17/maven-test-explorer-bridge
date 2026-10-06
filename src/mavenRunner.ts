@@ -2,10 +2,11 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import spawn from 'cross-spawn';
 import { ExtensionSettings } from './settings';
 import { SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR } from './constants';
 import { ensureNonRecursiveArgs } from './runPlanning';
-import { formatProgressDateTime } from './progressOutput';
+import { formatTestProgress } from './progressOutput';
 
 export interface MavenRunResult {
     readonly exitCode: number;
@@ -15,13 +16,15 @@ export interface MavenRunResult {
 export interface MavenRunProgressHandlers {
     readonly onClassStarted?: (className: string) => void;
     readonly onClassCompleted?: (className: string) => void;
+    readonly onProcessStarted?: (pid: number) => void;
+    readonly onOutput?: (text: string) => void;
 }
 
 /**
  * Spawns a Maven process in the given working directory, streaming output to the provided
  * OutputChannel. Resolves with the exit code when the process finishes.
  *
- * Uses shell: true so that 'mvn' resolves to 'mvn.cmd' on Windows without extra configuration.
+ * cross-spawn resolves Maven wrappers on Windows without exposing arguments to a shell.
  */
 // Surefire per-class summary line, e.g.:
 //   Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 30.5 s -- in tests.MyTest
@@ -45,11 +48,14 @@ export function runMaven(
         outputChannel.appendLine(`[Maven] Command: ${args.join(' ')}`);
         outputChannel.appendLine('');
 
-        const proc = cp.spawn(executable, spawnArgs, {
+        const proc = spawn(executable, spawnArgs, {
             cwd,
-            shell: true,
+            shell: false,
             env: process.env,
         });
+        if (proc.pid !== undefined) {
+            progressHandlers?.onProcessStarted?.(proc.pid);
+        }
 
         let runningPassed = 0;
         let runningFailed = 0;
@@ -66,9 +72,10 @@ export function runMaven(
             resolve(result);
         };
 
-        proc.stdout.on('data', (chunk: Buffer) => {
+        proc.stdout?.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
             outputChannel.append(text);
+            progressHandlers?.onOutput?.(text);
 
             stdoutBuf += text;
             let newlineIdx: number;
@@ -94,24 +101,22 @@ export function runMaven(
                     runningSkipped += classSkipped;
                     const done = runningPassed + runningFailed + runningSkipped;
                     const remaining = totalExpected !== undefined ? totalExpected - done : undefined;
-                    const parts = [
-                        `✓ ${runningPassed} passed`,
-                        `✗ ${runningFailed} failed`,
-                        `⊘ ${runningSkipped} skipped`,
-                    ];
-                    if (remaining !== undefined) {
-                        parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
-                    }
-                    outputChannel.appendLine(
-                        `[Test Progress] ${parts.join('  ')}  ${formatProgressDateTime(new Date())}`,
-                    );
+                    outputChannel.appendLine(formatTestProgress(
+                        runningPassed,
+                        runningFailed,
+                        runningSkipped,
+                        remaining,
+                        new Date(),
+                    ));
                     progressHandlers?.onClassCompleted?.(m[5]);
                 }
             }
         });
 
-        proc.stderr.on('data', (chunk: Buffer) => {
-            outputChannel.append(chunk.toString());
+        proc.stderr?.on('data', (chunk: Buffer) => {
+            const text = chunk.toString();
+            outputChannel.append(text);
+            progressHandlers?.onOutput?.(text);
         });
 
         const cancellationSubscription = token.onCancellationRequested(() => {

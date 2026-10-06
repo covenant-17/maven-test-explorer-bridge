@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.10] - 2026-10-06
+
+### Added
+
+- Added a local Agent Bridge with authenticated workspace IPC, JSON CLI, and MCP tools for checking, starting, following, and stopping managed Maven test runs.
+- Added agent-run source, command, and PID details to the custom explorer's running tooltip, plus a title-toolbar action that copies a complete Codex or Claude Code setup packet.
+
+### Changed
+
+- Upgraded `fast-xml-parser` to 5.11.2 and preserved numeric entity decoding in Surefire report attributes.
+- Separated Maven progress metrics and timestamps with vertical dividers for clearer output-channel scanning.
+- Maven processes now use argument-safe cross-platform spawning instead of `shell: true`.
+- Managed runs now share a single coordinator across the custom webview, Testing API, CLI, and MCP entry points.
+
 ## [1.0.9] - 2026-09-02
 
 ### Added

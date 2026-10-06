@@ -1,0 +1,23 @@
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { buildAgentSetupPacket } from '../src/agentSetup';
+
+test('builds a self-explanatory Codex and Claude setup packet', () => {
+    const packet = buildAgentSetupPacket({
+        cliPath: 'C:\\Users\\Example User\\mteb-cli.cjs',
+        mcpPath: 'C:\\Users\\Example User\\mteb-mcp.cjs',
+        workspace: 'C:\\!Dev\\sample project',
+    });
+
+    assert.match(packet, /^MAVEN TEST EXPLORER — AI AGENT SETUP PACKET/);
+    assert.match(packet, /do not execute it as one shell script/);
+    assert.match(packet, /Perform this setup now/);
+    assert.match(packet, /\.codex\/config\.toml/);
+    assert.match(packet, /\.mcp\.json/);
+    assert.match(packet, /AGENTS\.md for Codex or CLAUDE\.md for Claude Code/);
+    assert.match(packet, /\[mcp_servers\.maven_tests\]/);
+    assert.match(packet, /"maven_tests"/);
+    assert.match(packet, /maven_tests_get_status/);
+    assert.match(packet, /node "C:\\Users\\Example User\\mteb-cli\.cjs" status/);
+    assert.match(packet, /run --workspace "C:\\!Dev\\sample project" --clean-reports --json/);
+});

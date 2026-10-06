@@ -44,6 +44,7 @@ export const CMD_CLEAN_REPORTS = 'mavenTestExplorer.cleanReports';
 export const CMD_CLEAR_RESULTS = 'mavenTestExplorer.clearResults';
 export const CMD_CLEAR_RESULTS_AND_HISTORY = 'mavenTestExplorer.clearResultsAndHistory';
 export const CMD_SHOW_HISTORY = 'mavenTestExplorer.showHistory';
+export const CMD_COPY_AGENT_SETUP = 'mavenTestExplorer.copyAgentSetup';
 export const CMD_REVEAL_IN_CUSTOM_EXPLORER = 'mavenTestExplorer.revealInCustomExplorer';
 export const CMD_CONFIGURE_TREE_PARTS = 'mavenTestExplorer.configureTreeVisibleParts';
 export const CMD_CONFIGURE_LIST_PARTS = 'mavenTestExplorer.configureListVisibleParts';

@@ -30,6 +30,7 @@ import {
     CMD_CONFIGURE_TREE_PARTS,
     CMD_CONFIGURE_LIST_PARTS,
     CMD_CLEAN_REPORTS,
+    CMD_COPY_AGENT_SETUP,
     CMD_CLEAR_RESULTS,
     CMD_CLEAR_RESULTS_AND_HISTORY,
     CMD_COLLAPSE_ALL,
@@ -87,6 +88,17 @@ import {
     TestMetadataPart,
     TestRowPart,
 } from './rowVisibility';
+import {
+    AgentConfigurationSnapshot,
+    AgentRequest,
+    AgentRunStats,
+    AgentStartRunRequest,
+    RunSource,
+    validateStartRunRequest,
+} from './agentProtocol';
+import { AgentBridgeServer, removeStaleDescriptors } from './agentBridgeServer';
+import { bridgeError, RunCoordinator } from './runCoordinator';
+import { buildAgentSetupPacket } from './agentSetup';
 
 interface RunTarget {
     module: MavenModule;
@@ -95,6 +107,14 @@ interface RunTarget {
     classNames: readonly string[];
     runningNodeIds?: readonly string[];
     expectedTestCount?: number;
+}
+
+interface RunInvocationOptions {
+    readonly source?: RunSource;
+    readonly profiles?: readonly string[];
+    readonly goals?: readonly string[];
+    readonly extraArgs?: readonly string[];
+    readonly cleanReports?: boolean;
 }
 
 interface FailedClassTarget {
@@ -125,6 +145,9 @@ let totalRunClasses = 0;
 const currentRunClasses = new Set<string>();
 const completedRunClasses = new Set<string>();
 let selectedNodePersistTimer: ReturnType<typeof setTimeout> | undefined;
+const runCoordinator = new RunCoordinator();
+let agentBridgeServer: AgentBridgeServer | undefined;
+let agentClientLaunchers: { cli: string; mcp: string } | undefined;
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
@@ -148,6 +171,7 @@ let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    agentClientLaunchers = provisionAgentClients(context);
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.running', false);
     context.subscriptions.push(outputChannel);
     outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
@@ -209,6 +233,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showInformationMessage('Maven Test Explorer: No pom.xml detected in workspace.');
     }
     await refresh(context, false);
+    removeStaleDescriptors();
+    const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+    if (workspaceFolders.length > 0) {
+        try {
+            agentBridgeServer = new AgentBridgeServer(workspaceFolders, {
+                handle: (request) => handleAgentRequest(context, request),
+            });
+            const descriptor = await agentBridgeServer.start();
+            context.subscriptions.push(new vscode.Disposable(() => { void agentBridgeServer?.dispose(); }));
+            outputChannel.appendLine(`[Agent Bridge] Ready for session ${descriptor.sessionId}`);
+        } catch (error) {
+            agentBridgeServer = undefined;
+            outputChannel.appendLine(`[Agent Bridge] Failed to start: ${String(error)}`);
+        }
+    }
     outputChannel.appendLine('[Extension] Maven Test Explorer custom view activated.');
 }
 
@@ -216,6 +255,8 @@ export function deactivate(): void {
     activeCancellationSource?.cancel();
     activeCancellationSource?.dispose();
     activeCancellationSource = undefined;
+    void agentBridgeServer?.dispose();
+    agentBridgeServer = undefined;
 }
 
 async function refresh(context: vscode.ExtensionContext, showMessage: boolean): Promise<void> {
@@ -326,13 +367,13 @@ async function runInlineRequest(
     request: vscode.TestRunRequest,
 ): Promise<void> {
     if (request.include === undefined && (request.exclude?.length ?? 0) === 0) {
-        await runAll(context);
+        await runAll(context, 'testing-api');
         return;
     }
 
     const requestedIds = inlineRequestedNodeIds(request);
     if (requestedIds.length > 0) {
-        await runNodes(context, requestedIds);
+        await runNodes(context, requestedIds, 'testing-api');
     } else {
         outputChannel.appendLine('[Runner] No Maven tests matched the requested VS Code folder/test scope.');
     }
@@ -467,7 +508,7 @@ function hasVisibleExpandedItems(roots: readonly CustomTestNode[]): boolean {
     return roots.some(visitNode);
 }
 
-async function runAll(context: vscode.ExtensionContext): Promise<void> {
+async function runAll(context: vscode.ExtensionContext, source: RunSource = 'webview'): Promise<void> {
     const targets = buildReactorGroups(currentModules).map((group) => ({
         module: group.executionModule,
         scopeModules: group.scopeModules,
@@ -475,7 +516,7 @@ async function runAll(context: vscode.ExtensionContext): Promise<void> {
         classNames: [],
         runningNodeIds: group.scopeModules.flatMap(nodeIdsForModule),
     }));
-    await runTargets(context, targets, 'Run All');
+    await runTargets(context, targets, 'Run All', { source });
 }
 
 function collectProjectTags(roots: readonly CustomTestNode[]): string[] {
@@ -565,7 +606,11 @@ async function runNode(context: vscode.ExtensionContext, id: string): Promise<vo
     }], nodePathLabel(node));
 }
 
-async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]): Promise<void> {
+async function runNodes(
+    context: vscode.ExtensionContext,
+    ids: readonly string[],
+    source: RunSource = 'webview',
+): Promise<void> {
     const selectedIds = new Set(ids.filter((id) => currentTree.nodesById.has(id)));
     const nodes = Array.from(selectedIds)
         .map((id) => currentTree.nodesById.get(id))
@@ -602,7 +647,7 @@ async function runNodes(context: vscode.ExtensionContext, ids: readonly string[]
             classNames: Array.from(new Set(target.classNames)),
             runningNodeIds: Array.from(new Set(target.runningNodeIds)),
         }));
-        await runTargets(context, targets, `Run ${ids.length} Tests`);
+        await runTargets(context, targets, `Run ${ids.length} Tests`, { source });
     }
 }
 
@@ -634,6 +679,7 @@ async function runTargets(
     context: vscode.ExtensionContext,
     targets: readonly RunTarget[],
     historyLabel: string,
+    invocation: RunInvocationOptions = {},
 ): Promise<void> {
     if (running || targets.length === 0) {
         return;
@@ -642,12 +688,22 @@ async function runTargets(
         ...target,
         expectedTestCount: target.expectedTestCount ?? expectedTestCount(target.runningNodeIds ?? []),
     }));
-    const settings = readSettings();
+    const baseSettings = readSettings();
+    const settings = {
+        ...baseSettings,
+        defaultProfiles: invocation.profiles ?? baseSettings.defaultProfiles,
+        defaultCommand: invocation.goals?.join(' ') ?? baseSettings.defaultCommand,
+    };
     if (settings.showOutputChannel) {
         outputChannel.show(true);
     }
     outputChannel.appendLine(
         `[Runner] Scope: ${executionTargets.length} Maven execution(s), ${currentModules.length} discovered module(s), ${executionTargets.reduce((sum, target) => sum + target.expectedTestCount, 0)} test(s): ${executionTargets.map((target) => target.module.moduleDir).join(', ')}`,
+    );
+    runCoordinator.start(
+        invocation.source ?? 'webview',
+        historyLabel,
+        expectedClassCount(new Set(executionTargets.flatMap((target) => target.runningNodeIds ?? []))),
     );
     running = true;
     activeHistoryEntryDuringRun = undefined;
@@ -683,7 +739,7 @@ async function runTargets(
 
     try {
         for (const target of executionTargets) {
-            if (settings.clearReportsBeforeRun) {
+            if (invocation.cleanReports ?? settings.clearReportsBeforeRun) {
                 for (const scopeModule of target.scopeModules) {
                     clearReportDirectories(scopeModule.moduleDir, settings.reportGlobs);
                     outputChannel.appendLine(`[Runner] Cleared reports in: ${scopeModule.moduleDir}`);
@@ -712,11 +768,18 @@ async function runTargets(
                     true,
                 );
             }
+            if (invocation.extraArgs && invocation.extraArgs.length > 0) {
+                args = [args[0], ...invocation.extraArgs, ...args.slice(1)];
+            }
+            runCoordinator.setExecution(args, target.module.moduleDir);
+            runCoordinator.appendOutput(`[Maven] Running in: ${target.module.moduleDir}\n[Maven] Command: ${args.join(' ')}\n`);
+            provider?.updateRunSummary(buildWebviewRunSummary());
 
             const poller = startRuntimeReportPolling(
                 target.scopeModules.map((module) => module.moduleDir),
                 settings.reportGlobs,
                 (runtimeResults) => {
+                    runCoordinator.setStats(statsForSuites([...allResults, ...runtimeResults]));
                     publishResults(
                         undefined,
                         inlineTestBridge,
@@ -738,13 +801,20 @@ async function runTargets(
                     cancellationSource.token,
                     target.expectedTestCount,
                     {
+                        onProcessStarted: (pid) => {
+                            runCoordinator.setPid(pid);
+                            provider?.updateRunSummary(buildWebviewRunSummary());
+                        },
+                        onOutput: (text) => runCoordinator.appendOutput(text),
                         onClassStarted: (className) => {
                             currentRunClasses.add(className);
+                            runCoordinator.classStarted(className);
                             provider?.updateRunSummary(buildWebviewRunSummary());
                         },
                         onClassCompleted: (className) => {
                             currentRunClasses.delete(className);
                             completedRunClasses.add(className);
+                            runCoordinator.classCompleted(className);
                             provider?.updateRunSummary(buildWebviewRunSummary());
                         },
                     },
@@ -763,6 +833,7 @@ async function runTargets(
                     ? reportedResults
                     : addSkippedResultsForLifecycleFailures(reportedResults, target.runningNodeIds ?? []);
                 allResults.push(...suiteResults);
+                runCoordinator.setStats(statsForSuites(allResults));
                 if (!result.cancelled && result.exitCode !== 0 && reportedResults.length === 0) {
                     markTargetInfrastructureFailure(inlineRun, target, result.exitCode);
                 }
@@ -785,6 +856,10 @@ async function runTargets(
                     historyLabel,
                     determineRunOutcome(cancelled, executions),
                     executions,
+                    {
+                        managedSource: invocation.source ?? 'webview',
+                        command: runCoordinator.getStatus().run?.command,
+                    },
                 );
             }
             const failedWithoutReports = !cancelled
@@ -823,7 +898,10 @@ async function runTargets(
             lastRunDurationMs = runStartedAt === undefined ? undefined : Date.now() - runStartedAt;
             lastRunResults = [...allResults];
             lastRunCancelled = cancelled;
-            lastRunFailed = determineRunOutcome(cancelled, executions) === 'failed';
+            const outcome = determineRunOutcome(cancelled, executions);
+            lastRunFailed = outcome === 'failed';
+            runCoordinator.setStats(statsForSuites(allResults));
+            runCoordinator.finish(outcome);
             activeHistoryEntryDuringRun = undefined;
             running = false;
             runStartedAt = undefined;
@@ -886,6 +964,7 @@ function buildWebviewRunSummary(): WebviewRunSummary {
             : Array.from(resultCache.values()));
     const timing = calculateSuiteTiming(suiteResults);
     const fallbackRunDuration = timing.suiteDurationMs;
+    const managedRun = runCoordinator.getStatus().run;
     return {
         currentClasses: Array.from(currentRunClasses).sort((left, right) => left.localeCompare(right)),
         completedClasses: completedRunClasses.size,
@@ -896,7 +975,64 @@ function buildWebviewRunSummary(): WebviewRunSummary {
         fixtureDurationMs: timing.fixtureDurationMs,
         cancelled: !running && lastRunCancelled,
         failed: !running && lastRunFailed,
+        source: managedRun?.source,
+        command: managedRun?.command,
+        pid: managedRun?.pid,
     };
+}
+
+function provisionAgentClients(context: vscode.ExtensionContext): { cli: string; mcp: string } | undefined {
+    try {
+        const packageJson = JSON.parse(fs.readFileSync(path.join(context.extensionUri.fsPath, 'package.json'), 'utf8')) as { version: string };
+        const baseDir = path.join(context.globalStorageUri.fsPath, 'agent-bridge');
+        const versionDir = path.join(baseDir, packageJson.version);
+        fs.mkdirSync(versionDir, { recursive: true });
+        for (const name of ['cli.js', 'mcp-server.js']) {
+            const source = path.join(context.extensionUri.fsPath, 'dist', name);
+            if (!fs.existsSync(source)) return undefined;
+            fs.copyFileSync(source, path.join(versionDir, name));
+        }
+        fs.writeFileSync(path.join(baseDir, 'current.json'), JSON.stringify({ version: packageJson.version }));
+        const cli = path.join(baseDir, 'mteb-cli.cjs');
+        const mcp = path.join(baseDir, 'mteb-mcp.cjs');
+        writeLauncher(cli, 'cli.js');
+        writeLauncher(mcp, 'mcp-server.js');
+        return { cli, mcp };
+    } catch (error) {
+        outputChannel?.appendLine(`[Agent Bridge] Could not provision clients: ${String(error)}`);
+        return undefined;
+    }
+}
+
+function writeLauncher(file: string, entryPoint: string): void {
+    if (fs.existsSync(file)) return;
+    const source = [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const base = __dirname;",
+        "const current = JSON.parse(fs.readFileSync(path.join(base, 'current.json'), 'utf8'));",
+        `require(path.join(base, current.version, ${JSON.stringify(entryPoint)}));`,
+        '',
+    ].join('\n');
+    const temporary = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(temporary, source, 'utf8');
+    fs.renameSync(temporary, file);
+}
+
+async function copyAgentSetup(): Promise<void> {
+    if (!agentClientLaunchers) {
+        vscode.window.showErrorMessage('Maven Test Explorer: Agent Bridge clients are not available in this build.');
+        return;
+    }
+    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspace) return;
+    const packet = buildAgentSetupPacket({
+        cliPath: agentClientLaunchers.cli,
+        mcpPath: agentClientLaunchers.mcp,
+        workspace,
+    });
+    await vscode.env.clipboard.writeText(packet);
+    vscode.window.showInformationMessage('Maven Test Explorer: AI Agent setup packet copied. Paste it into Codex or Claude Code.');
 }
 
 function calculateSuiteTiming(suiteResults: readonly SuiteResult[]): {
@@ -931,6 +1067,154 @@ function calculateSuiteTiming(suiteResults: readonly SuiteResult[]): {
         fixtureDurationMs: suitesWithDuration > 0 ? fixtureDurationMs : undefined,
         suiteDurationMs: suitesWithDuration > 0 ? testDurationMs + fixtureDurationMs : testDurationMs,
     };
+}
+
+function statsForSuites(suiteResults: readonly SuiteResult[]): AgentRunStats {
+    const stats = { passed: 0, failed: 0, errors: 0, skipped: 0 };
+    for (const suite of suiteResults) {
+        for (const testCase of suite.testCases) {
+            if (testCase.synthetic) continue;
+            if (testCase.status === 'passed') stats.passed++;
+            else if (testCase.status === 'failed') stats.failed++;
+            else if (testCase.status === 'error') stats.errors++;
+            else if (testCase.status === 'skipped') stats.skipped++;
+        }
+    }
+    return stats;
+}
+
+async function handleAgentRequest(context: vscode.ExtensionContext, request: AgentRequest): Promise<unknown> {
+    switch (request.operation) {
+        case 'get_status':
+            return runCoordinator.getStatus();
+        case 'get_configuration':
+            return agentConfiguration();
+        case 'get_output': {
+            const params = asRecord(request.params);
+            const tailLines = typeof params.tailLines === 'number' ? params.tailLines : 200;
+            return runCoordinator.getOutput(typeof params.runId === 'string' ? params.runId : undefined, tailLines);
+        }
+        case 'stop_run': {
+            const params = asRecord(request.params);
+            if (typeof params.runId !== 'string') throw bridgeError('INVALID_REQUEST', 'runId is required.');
+            runCoordinator.assertActiveRun(params.runId);
+            stopRun();
+            return runCoordinator.getStatus();
+        }
+        case 'start_run': {
+            if (running || runCoordinator.getStatus().active) {
+                throw bridgeError('RUN_ALREADY_ACTIVE', 'A Maven test run is already active.', runCoordinator.getStatus());
+            }
+            let startRequest: AgentStartRunRequest;
+            try {
+                startRequest = validateStartRunRequest(request.params ?? {});
+            } catch (error) {
+                throw bridgeError('INVALID_REQUEST', error instanceof Error ? error.message : String(error));
+            }
+            const targets = agentTargets(startRequest);
+            if (targets.length === 0) {
+                throw bridgeError('NO_MAVEN_MODULES', 'No Maven modules are available in the active workspace.');
+            }
+            const extraArgs = [
+                ...Object.entries(startRequest.properties ?? {}).map(([key, value]) => `-D${key}=${String(value)}`),
+                ...(startRequest.additionalArgs ?? []),
+            ];
+            const label = startRequest.label?.trim() || 'Agent Run';
+            void runTargets(context, targets, label, {
+                source: 'agent',
+                goals: startRequest.goals,
+                profiles: startRequest.profiles,
+                extraArgs,
+                cleanReports: startRequest.cleanReports,
+            }).catch((error: unknown) => {
+                outputChannel.appendLine(`[Agent Bridge] Run failed: ${String(error)}`);
+            });
+            return runCoordinator.getStatus();
+        }
+    }
+    throw bridgeError('INVALID_REQUEST', `Unknown Agent Bridge operation: ${String(request.operation)}`);
+}
+
+function agentConfiguration(): AgentConfigurationSnapshot {
+    const settings = readSettings();
+    return {
+        workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+        modules: currentModules.map((module) => ({
+            key: module.key,
+            artifactId: module.artifactId,
+            moduleDir: module.moduleDir,
+        })),
+        defaults: {
+            goals: settings.defaultCommand.split(/\s+/).filter(Boolean),
+            profiles: [...settings.defaultProfiles],
+            additionalArgs: settings.additionalArgs,
+            cleanReports: settings.clearReportsBeforeRun,
+        },
+    };
+}
+
+function agentTargets(request: AgentStartRunRequest): RunTarget[] {
+    if (!request.scope || request.scope.kind === 'all') {
+        return buildReactorGroups(currentModules).map((group) => ({
+            module: group.executionModule,
+            scopeModules: group.scopeModules,
+            mode: 'reactor' as const,
+            classNames: [],
+            runningNodeIds: group.scopeModules.flatMap(nodeIdsForModule),
+        }));
+    }
+    const selectedIds: string[] = [];
+    for (const selector of request.scope.selectors) {
+        const matches = matchingNodes(selector, request.scope.moduleKey);
+        if (matches.length === 0) {
+            throw bridgeError('TEST_NOT_FOUND', `No test matches selector: ${selector}`);
+        }
+        if (matches.length > 1) {
+            throw bridgeError('AMBIGUOUS_TEST_SELECTOR', `Selector matches multiple tests: ${selector}`, {
+                candidates: matches.map((node) => ({ id: node.id, fqcn: node.fqcn, methodName: node.methodName, moduleDir: node.moduleDir })),
+            });
+        }
+        selectedIds.push(matches[0].id);
+    }
+    const grouped = new Map<string, { module: MavenModule; classNames: string[]; runningNodeIds: string[] }>();
+    for (const id of selectedIds) {
+        const node = currentTree.nodesById.get(id)!;
+        const module = currentModules.find((candidate) => candidate.moduleDir === node.moduleDir)!;
+        const target = grouped.get(module.moduleDir) ?? { module, classNames: [], runningNodeIds: [] };
+        target.classNames.push(...findRunnableClassTargets(node));
+        target.runningNodeIds.push(...collectSubtreeNodeIds(node));
+        grouped.set(module.moduleDir, target);
+    }
+    return Array.from(grouped.values()).map((target) => ({
+        ...target,
+        scopeModules: [target.module],
+        mode: 'module' as const,
+        classNames: Array.from(new Set(target.classNames)),
+        runningNodeIds: Array.from(new Set(target.runningNodeIds)),
+    }));
+}
+
+function matchingNodes(selector: string, moduleKey?: string): CustomTestNode[] {
+    const normalized = selector.trim();
+    return Array.from(currentTree.nodesById.values()).filter((node) => {
+        if (node.kind !== 'class' && node.kind !== 'method') return false;
+        const module = currentModules.find((candidate) => candidate.moduleDir === node.moduleDir);
+        if (!module || (moduleKey && module.key !== moduleKey)) return false;
+        const candidates = node.kind === 'class'
+            ? [node.fqcn, node.className]
+            : [
+                node.fqcn && node.methodName ? `${node.fqcn}#${node.methodName}` : undefined,
+                node.className && node.methodName ? `${node.className}#${node.methodName}` : undefined,
+            ];
+        return candidates.includes(normalized);
+    });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw bridgeError('INVALID_REQUEST', 'Operation parameters must be an object.');
+    }
+    return value as Record<string, unknown>;
 }
 
 function addSkippedResultsForLifecycleFailures(
@@ -1171,6 +1455,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS, () => clearResults(context, false)),
         vscode.commands.registerCommand(CMD_CLEAR_RESULTS_AND_HISTORY, () => clearResults(context, true)),
         vscode.commands.registerCommand(CMD_SHOW_HISTORY, () => showHistory(context)),
+        vscode.commands.registerCommand(CMD_COPY_AGENT_SETUP, () => copyAgentSetup()),
         vscode.commands.registerCommand(
             CMD_REVEAL_IN_CUSTOM_EXPLORER,
             (item: vscode.TestItem) => revealInlineItemInCustomExplorer(context, item),

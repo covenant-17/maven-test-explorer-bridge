@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { SuiteResult, TestCaseStatus } from './surefireParser';
 import { readSettings } from './settings';
 import { MavenExecutionRecord, RunOutcome, shouldPersistRun } from './runPlanning';
+import type { RunSource } from './agentProtocol';
 
 const HISTORY_STATE_KEY = 'mavenTestExplorer.runHistory';
 
@@ -13,6 +14,8 @@ export interface RunHistoryEntry {
     readonly suiteResults: readonly SuiteResult[];
     readonly outcome?: RunOutcome;
     readonly executions?: readonly MavenExecutionRecord[];
+    readonly managedSource?: RunSource;
+    readonly command?: readonly string[];
 }
 
 interface RunStats {
@@ -47,6 +50,7 @@ export function saveRunToHistory(
     source: string,
     outcome: RunOutcome = 'completed',
     executions: readonly MavenExecutionRecord[] = [],
+    metadata?: { readonly managedSource?: RunSource; readonly command?: readonly string[] },
 ): void {
     if (!shouldPersistRun(outcome, suiteResults.length)) {
         return;
@@ -78,6 +82,8 @@ export function saveRunToHistory(
         suiteResults,
         outcome,
         executions,
+        managedSource: metadata?.managedSource,
+        command: metadata?.command,
     };
     const history = loadHistory(context);
     const updated = [entry, ...history].slice(0, readSettings().maxHistoryEntries);
