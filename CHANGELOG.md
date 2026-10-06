@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.1] - 2026-10-06
+
+### Added
+
+- Added a Maven profile picker beside the explorer filter with deterministic theme-aware colors, active-profile highlighting, and persistent selection for future test runs.
+- Added profile-description tooltips and direct navigation to each profile declaration in `pom.xml`.
+
+### Changed
+
+- Saved POM changes now refresh available profile metadata after a short debounce without rescanning Java tests.
+- Profile accents and the running-status tooltip use a quieter, more consistent presentation across narrow and wide Testing sidebars.
+
 ## [1.1.0] - 2026-10-06
 
 ### Added

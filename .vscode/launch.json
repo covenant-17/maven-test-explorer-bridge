@@ -3,15 +3,14 @@
   "configurations": [
     {
       "name": "Run Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder:maven-test-explorer-bridge}",
-        "C:\\!Dev\\javaTest"
-      ],
+      "type": "node",
+      "request": "attach",
+      "port": 9333,
+      "timeout": 30000,
       "outFiles": ["${workspaceFolder:maven-test-explorer-bridge}/dist/**/*.js"],
-      "preLaunchTask": "npm: compile",
-      "sourceMaps": true
+      "preLaunchTask": "Launch Extension Host (inspect)",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"]
     }
   ]
 }

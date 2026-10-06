@@ -4,10 +4,12 @@ import * as fs from 'fs';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
 import {
     buildReactorGroups,
+    buildMavenProfileCatalog,
     dedupeMavenModules,
     isPathInside,
     moduleItemId,
     moduleKeyForDir,
+    parseMavenPom,
     resolveModuleForResult,
 } from './mavenModule';
 import { scanTestFiles, TestClassInfo } from './javaTestScanner';
@@ -54,9 +56,11 @@ import {
     CMD_SORT_BY_STATUS_DESC,
     CMD_SHOW_LIST_VIEW,
     CMD_SHOW_TREE_VIEW,
+    CONFIG_DEFAULT_PROFILES,
     CONTROLLER_LABEL,
     EXTENSION_ID,
     OUTPUT_CHANNEL_NAME,
+    POM_GLOB,
     RUN_PROFILE_LABEL,
 } from './constants';
 import { clearHistory, loadHistory, saveRunToHistory, trimHistory, type RunHistoryEntry } from './runHistory';
@@ -205,6 +209,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearResults: () => clearResults(context, false),
         clearResultsAndHistory: () => clearResults(context, true),
         showHistory: () => showHistory(context),
+        selectProfile: (profile) => selectProfile(profile),
+        openProfile: (profile) => openProfile(profile),
         applyFilter: (value) => applyFilter(context, value),
         clearFilter: () => applyFilter(context, ''),
         openNode: (id, target) => openNode(id, target),
@@ -218,6 +224,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     registerCommands(context);
     registerJavaAutoRefresh(context);
+    registerMavenProfileWatcher(context);
     registerReportWatcher(context);
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('mavenTestExplorer.rowLayout')) {
@@ -226,6 +233,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         if (event.affectsConfiguration('mavenTestExplorer.maxHistoryEntries')) {
             void trimHistory(context, readSettings().maxHistoryEntries);
+        }
+        if (event.affectsConfiguration(`mavenTestExplorer.${CONFIG_DEFAULT_PROFILES}`)) {
+            rebuildTree();
         }
     }));
 
@@ -306,11 +316,20 @@ function rebuildTree(): void {
     if (!selectedNodeId || !currentTree.nodesById.has(selectedNodeId)) {
         selectedNodeId = undefined;
     }
+    const activeProfiles = [...readSettings().defaultProfiles];
+    const profileCatalog = buildMavenProfileCatalog(
+        currentModules,
+        activeProfiles,
+    );
     provider?.updateState({
         roots: currentTree.filteredRoots,
         availableTags: collectProjectTags(currentTree.roots),
         availableAnnotations: collectProjectAnnotations(currentTree.roots),
         filterFacets: collectFilterFacets(currentTree.roots),
+        availableProfiles: profileCatalog.profiles,
+        activeProfiles,
+        profileDescriptions: profileCatalog.descriptions,
+        profileSources: profileCatalog.sources,
         stats: currentTree.stats,
         filterText: activeFilterExpression,
         filterError: currentTree.filterError,
@@ -342,6 +361,29 @@ function rebuildTree(): void {
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.viewMode', activeViewMode);
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.running', running);
     syncInlineResults();
+}
+
+async function selectProfile(profile: string | undefined): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration('mavenTestExplorer');
+    await configuration.update(
+        CONFIG_DEFAULT_PROFILES,
+        profile ? [profile] : [],
+        vscode.ConfigurationTarget.Workspace,
+    );
+    rebuildTree();
+}
+
+async function openProfile(profile: string): Promise<void> {
+    const source = buildMavenProfileCatalog(currentModules, []).sources[profile];
+    if (!source) {
+        vscode.window.showInformationMessage(`Maven Test Explorer: Profile '${profile}' is not declared in a workspace pom.xml.`);
+        return;
+    }
+    const document = await vscode.workspace.openTextDocument(source.pomPath);
+    const editor = await vscode.window.showTextDocument(document);
+    const position = new vscode.Position(Math.max(0, source.line - 1), 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
 function syncInlineResults(): void {
@@ -1967,6 +2009,81 @@ function registerJavaAutoRefresh(context: vscode.ExtensionContext): void {
             for (const watcher of watchers) watcher.dispose();
         }),
     );
+}
+
+function registerMavenProfileWatcher(context: vscode.ExtensionContext): void {
+    const watcher = vscode.workspace.createFileSystemWatcher(POM_GLOB);
+    const pendingPomPaths = new Set<string>();
+    let refreshDebounce: NodeJS.Timeout | undefined;
+    let requiresFullRefresh = false;
+
+    const schedule = (uri: vscode.Uri, fullRefresh: boolean): void => {
+        pendingPomPaths.add(normalizedPath(uri.fsPath));
+        requiresFullRefresh = requiresFullRefresh || fullRefresh;
+        if (refreshDebounce) {
+            clearTimeout(refreshDebounce);
+        }
+        refreshDebounce = setTimeout(() => {
+            refreshDebounce = undefined;
+            const paths = new Set(pendingPomPaths);
+            const refreshAll = requiresFullRefresh;
+            pendingPomPaths.clear();
+            requiresFullRefresh = false;
+            if (refreshAll) {
+                outputChannel.appendLine('[Extension] Maven project structure changed, refreshing test discovery...');
+                void refresh(context, false);
+                return;
+            }
+            refreshMavenProfileMetadata(paths);
+        }, 750);
+    };
+
+    watcher.onDidChange((uri) => schedule(uri, false));
+    watcher.onDidCreate((uri) => schedule(uri, true));
+    watcher.onDidDelete((uri) => schedule(uri, true));
+    context.subscriptions.push(
+        watcher,
+        new vscode.Disposable(() => {
+            if (refreshDebounce) clearTimeout(refreshDebounce);
+        }),
+    );
+}
+
+function refreshMavenProfileMetadata(changedPomPaths: ReadonlySet<string>): void {
+    let changed = false;
+    currentModules = currentModules.map((module) => {
+        if (!changedPomPaths.has(normalizedPath(module.pomPath))) {
+            return module;
+        }
+        try {
+            const descriptor = parseMavenPom(fs.readFileSync(module.pomPath, 'utf8'));
+            const profilesChanged = JSON.stringify(module.availableProfiles) !== JSON.stringify(descriptor.profiles)
+                || JSON.stringify(module.profileDescriptions) !== JSON.stringify(descriptor.profileDescriptions)
+                || JSON.stringify(module.profileSourceLines) !== JSON.stringify(descriptor.profileSourceLines);
+            if (!profilesChanged) {
+                return module;
+            }
+            changed = true;
+            return {
+                ...module,
+                availableProfiles: descriptor.profiles,
+                profileDescriptions: descriptor.profileDescriptions,
+                profileSourceLines: descriptor.profileSourceLines,
+            };
+        } catch (error) {
+            outputChannel.appendLine(`[Extension] Unable to refresh Maven profiles from ${module.pomPath}: ${String(error)}`);
+            return module;
+        }
+    });
+    if (changed) {
+        outputChannel.appendLine('[Extension] Maven profiles changed, updating profile picker...');
+        rebuildTree();
+    }
+}
+
+function normalizedPath(filePath: string): string {
+    const normalized = path.normalize(filePath);
+    return process.platform === 'win32' ? normalized.toLocaleLowerCase() : normalized;
 }
 
 function registerReportWatcher(context: vscode.ExtensionContext): void {

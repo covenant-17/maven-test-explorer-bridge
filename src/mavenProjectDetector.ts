@@ -40,6 +40,9 @@ export async function findMavenModules(workspaceFolder: vscode.WorkspaceFolder):
             moduleDir,
             artifactId,
             declaredModuleDirs,
+            availableProfiles: descriptor.profiles,
+            profileDescriptions: descriptor.profileDescriptions,
+            profileSourceLines: descriptor.profileSourceLines,
         });
     }
 
@@ -60,11 +63,17 @@ export async function findMavenModules(workspaceFolder: vscode.WorkspaceFolder):
  * Reads the first <artifactId> element from a pom.xml file.
  * Returns undefined if the file cannot be read or the element is not found.
  */
-function extractPomDescriptor(pomPath: string): { artifactId?: string; modules: readonly string[] } {
+function extractPomDescriptor(pomPath: string): {
+    artifactId?: string;
+    modules: readonly string[];
+    profiles: readonly string[];
+    profileDescriptions: Readonly<Record<string, string>>;
+    profileSourceLines: Readonly<Record<string, number>>;
+} {
     try {
         const content = fs.readFileSync(pomPath, 'utf8');
         return parseMavenPom(content);
     } catch {
-        return { modules: [] };
+        return { modules: [], profiles: [], profileDescriptions: {}, profileSourceLines: {} };
     }
 }

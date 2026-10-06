@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import test from 'node:test';
 import {
     buildReactorGroups,
+    buildMavenProfileCatalog,
     dedupeMavenModules,
     findDeepestModuleForPath,
     MavenModule,
@@ -23,6 +24,9 @@ function moduleAt(
         pomPath: path.join(moduleDir, 'pom.xml'),
         artifactId,
         declaredModuleDirs,
+        availableProfiles: [],
+        profileDescriptions: {},
+        profileSourceLines: {},
     };
 }
 
@@ -35,6 +39,46 @@ test('parses a single or repeated Maven modules element', () => {
     `);
     assert.equal(descriptor.artifactId, 'reactor');
     assert.deepEqual(descriptor.modules, ['api', 'impl/pom.xml']);
+    assert.deepEqual(descriptor.profiles, []);
+    assert.deepEqual(descriptor.profileDescriptions, {});
+    assert.deepEqual(descriptor.profileSourceLines, {});
+});
+
+test('parses Maven profile ids for interactive selection', () => {
+    const descriptor = parseMavenPom(`
+        <project>
+          <profiles>
+            <profile>
+              <id>local</id>
+              <properties>
+                <mavenTestExplorer.profileDescription>Local developer services</mavenTestExplorer.profileDescription>
+              </properties>
+            </profile>
+            <profile><id>parallel</id><description>Parallel custom fallback</description></profile>
+          </profiles>
+        </project>
+    `);
+    assert.deepEqual(descriptor.profiles, ['local', 'parallel']);
+    assert.deepEqual(descriptor.profileDescriptions, {
+        local: 'Local developer services',
+        parallel: 'Parallel custom fallback',
+    });
+    assert.deepEqual(descriptor.profileSourceLines, { local: 4, parallel: 10 });
+});
+
+test('keeps an externally configured active profile visible beside POM profiles', () => {
+    const module = {
+        ...moduleAt(path.resolve('fixture/project'), 'project'),
+        availableProfiles: ['pom-profile'],
+        profileDescriptions: { 'pom-profile': 'Declared in the POM' },
+        profileSourceLines: { 'pom-profile': 12 },
+    };
+    const catalog = buildMavenProfileCatalog([module], ['settings-profile']);
+    assert.deepEqual(catalog.profiles, ['pom-profile', 'settings-profile']);
+    assert.deepEqual(catalog.descriptions, { 'pom-profile': 'Declared in the POM' });
+    assert.deepEqual(catalog.sources, {
+        'pom-profile': { pomPath: module.pomPath, line: 12 },
+    });
 });
 
 test('decodes XML entities in Maven coordinates and module paths', () => {

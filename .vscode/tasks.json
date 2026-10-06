@@ -17,6 +17,27 @@
       "isBackground": true,
       "problemMatcher": ["$tsc-watch"],
       "detail": "Watch and rebuild on change"
+    },
+    {
+      "label": "Launch Extension Host (inspect)",
+      "type": "process",
+      "command": "${execPath}",
+      "args": [
+        "--new-window",
+        "--extensionDevelopmentPath",
+        "${workspaceFolder:maven-test-explorer-bridge}",
+        "--inspect-extensions",
+        "9333",
+        "C:\\!Dev\\javaTest"
+      ],
+      "dependsOrder": "sequence",
+      "dependsOn": "npm: compile",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      }
     }
   ]
 }

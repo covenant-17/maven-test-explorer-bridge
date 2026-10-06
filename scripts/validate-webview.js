@@ -30,4 +30,22 @@ if (source.includes("textSpan('Maven failed'") || source.includes('failed-label'
     throw new Error('Failed Maven runs must not add a dedicated summary badge.');
 }
 
+const showTooltipStart = source.indexOf('function showNodeTooltip(');
+const tooltipPositionReset = source.indexOf("nodeTooltipEl.style.left = margin + 'px';", showTooltipStart);
+const tooltipWidthMeasurement = source.indexOf('nodeTooltipEl.offsetWidth', showTooltipStart);
+if (showTooltipStart < 0 || tooltipPositionReset < showTooltipStart || tooltipPositionReset > tooltipWidthMeasurement) {
+    throw new Error('Tooltips must be positioned against the viewport before measuring their width.');
+}
+
+for (const profilePickerInvariant of [
+    'id="profileButton"',
+    'function profileDescriptionTooltip(profile)',
+    "post('selectProfile', { value })",
+    "post('openProfile', { value })",
+]) {
+    if (!source.includes(profilePickerInvariant)) {
+        throw new Error(`Missing Maven profile picker invariant: ${profilePickerInvariant}`);
+    }
+}
+
 console.log('[validate-webview] Generated webview JavaScript syntax and layout invariants are valid.');

@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.1-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -21,6 +21,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Surefire and Failsafe result mapping** — show passed, failed, errored, skipped, and total counts while retaining source navigation and error details.
 - **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
 - **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
+- **Interactive Maven profiles** — select a color-coded profile beside the search field; profiles and optional descriptions are discovered from workspace POMs.
 - **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
 - **Run History** — store and restore completed, failed, or cancelled result sets per workspace, or switch back to the pinned current run while Maven is active.
@@ -52,6 +53,8 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 5. The explorer updates when matching Surefire/Failsafe `TEST-*.xml` files are written.
 
 By default the extension prefers the Maven Wrapper and falls back to `mvn`. Change the executable, goals, profiles, arguments, source globs, or report globs when the project uses a different layout.
+
+Use the profile button to the right of the search field to activate one discovered Maven profile for subsequent runs. Saved POM changes refresh profile metadata after a short debounce without rescanning Java tests. Profile colors are assigned deterministically from VS Code theme colors. Hover a profile to read `<mavenTestExplorer.profileDescription>` from that profile's `<properties>` in `pom.xml`; profiles without one show the supported markup. The source button pinned to a declared profile opens its `<profile>` line in the owning POM. A direct custom `<description>` is also read for compatibility, although Maven itself rejects that non-standard profile element.
 
 ## Using the Explorer
 
@@ -132,7 +135,7 @@ VS Code may prefix these titles with the **Maven Test Explorer** command categor
 |---|---|---|
 | `mavenTestExplorer.defaultCommand` | `"clean test"` | Goals used by Run All |
 | `mavenTestExplorer.agentDefaultCommand` | `"test"` | Safe default goals used by Agent Bridge all-scope runs |
-| `mavenTestExplorer.defaultProfiles` | `[]` | Profiles added to every Maven invocation |
+| `mavenTestExplorer.defaultProfiles` | `[]` | Profiles added to every Maven invocation; the profile picker writes its selection here |
 | `mavenTestExplorer.additionalArgs` | `""` | Extra arguments added to every Maven invocation |
 | `mavenTestExplorer.clearReportsBeforeRun` | `true` | Remove old matching XML reports before an extension-started run |
 | `mavenTestExplorer.agentClearReportsBeforeRun` | `false` | Preserve existing XML reports for Agent Bridge runs unless explicitly overridden |

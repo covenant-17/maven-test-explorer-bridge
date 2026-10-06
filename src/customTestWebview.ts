@@ -30,6 +30,10 @@ export interface WebviewState {
     availableTags: readonly string[];
     availableAnnotations: readonly string[];
     filterFacets: readonly (readonly string[])[];
+    availableProfiles: readonly string[];
+    activeProfiles: readonly string[];
+    profileDescriptions: Readonly<Record<string, string>>;
+    profileSources: Readonly<Record<string, { pomPath: string; line: number }>>;
     stats: CustomNodeStats;
     filterText: string;
     filterError?: string;
@@ -54,6 +58,8 @@ export interface WebviewHandlers {
     clearResults(): void | Promise<void>;
     clearResultsAndHistory(): void | Promise<void>;
     showHistory(): void | Promise<void>;
+    selectProfile(profile?: string): void | Promise<void>;
+    openProfile(profile: string): void | Promise<void>;
     applyFilter(value: string): void | Promise<void>;
     clearFilter(): void | Promise<void>;
     openNode(id: string, target?: 'test' | 'class'): void | Promise<void>;
@@ -71,6 +77,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         availableTags: [],
         availableAnnotations: [],
         filterFacets: [],
+        availableProfiles: [],
+        activeProfiles: [],
+        profileDescriptions: {},
+        profileSources: {},
         stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 },
         filterText: '',
         expandedIds: [],
@@ -147,6 +157,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'showHistory':
                 await this.handlers.showHistory();
+                break;
+            case 'selectProfile':
+                await this.handlers.selectProfile(message.value?.trim() || undefined);
+                break;
+            case 'openProfile':
+                if (message.value) { await this.handlers.openProfile(message.value); }
                 break;
             case 'applyFilter':
                 await this.handlers.applyFilter(message.value ?? '');
@@ -251,6 +267,152 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .filter-shell.invalid {
             border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+        }
+        .profile-picker {
+            position: relative;
+            flex: 0 0 auto;
+        }
+        .profile-button {
+            width: 44px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            padding: 0 4px;
+            color: var(--vscode-icon-foreground, var(--vscode-foreground));
+            background: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border, transparent);
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .profile-button[data-active="true"] {
+            border-color: var(--profile-accent);
+            border-color: color-mix(in srgb, var(--profile-accent) 70%, var(--vscode-input-background));
+        }
+        .profile-button[data-active="true"] .profile-icon {
+            color: var(--profile-accent);
+            color: color-mix(in srgb, var(--profile-accent) 70%, var(--vscode-input-background));
+        }
+        .profile-button:hover,
+        .profile-button[aria-expanded="true"] {
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .profile-button:focus-visible {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: 1px;
+        }
+        .profile-icon {
+            width: 16px;
+            height: 16px;
+            display: inline-flex;
+            color: currentColor;
+        }
+        .profile-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.35;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .profile-chevron {
+            width: 12px;
+            flex-basis: 12px;
+            font-size: 12px;
+        }
+        .profile-menu {
+            position: absolute;
+            z-index: 50;
+            top: calc(100% + 2px);
+            right: 0;
+            width: max-content;
+            min-width: 220px;
+            max-width: calc(100vw - 16px);
+            max-height: min(320px, calc(100vh - 56px));
+            padding: 4px;
+            color: var(--vscode-menu-foreground);
+            background: var(--vscode-menu-background);
+            border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent));
+            border-radius: 5px;
+            box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+            overflow-y: auto;
+        }
+        .profile-menu[hidden] {
+            display: none;
+        }
+        .profile-option {
+            width: 100%;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            color: inherit;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .profile-option:hover,
+        .profile-option:focus-within {
+            color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
+            background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground));
+            border-color: var(--vscode-focusBorder);
+        }
+        .profile-option-select {
+            min-width: 0;
+            height: 100%;
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 8px;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            text-align: left;
+            cursor: pointer;
+        }
+        .profile-option-select:focus-visible,
+        .profile-option-open:focus-visible {
+            outline: 0;
+        }
+        .profile-option-open {
+            width: 27px;
+            height: 22px;
+            flex: 0 0 27px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            border-left: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-menu-border, transparent));
+            cursor: pointer;
+        }
+        .profile-option-open:hover {
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .profile-color {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 9px;
+            background: var(--profile-color, var(--vscode-descriptionForeground));
+            border: 1px solid var(--profile-color, var(--vscode-descriptionForeground));
+            border-radius: 50%;
+        }
+        .profile-option-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .profile-option-check {
+            width: 14px;
+            margin-left: auto;
+            color: var(--profile-color, var(--vscode-foreground));
+            text-align: center;
         }
         .filter {
             flex: 1 1 auto;
@@ -896,8 +1058,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
         .node-tooltip {
             position: fixed;
-            z-index: 30;
-            max-width: min(420px, calc(100vw - 16px));
+            z-index: 60;
+            max-width: min(640px, calc(100vw - 16px));
             padding: 8px 10px;
             color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
             background: var(--vscode-editorHoverWidget-background, var(--vscode-menu-background));
@@ -957,6 +1119,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 <button id="clearFilterButton" class="icon-button" type="button" aria-label="Clear Filter"><span class="codicon codicon-close"></span></button>
                 <div id="filterSuggestions" class="filter-suggestions" role="listbox" hidden></div>
             </div>
+            <div id="profilePicker" class="profile-picker">
+                <button id="profileButton" class="profile-button" type="button" aria-label="Select Maven profile" aria-haspopup="listbox" aria-expanded="false">
+                    <span class="profile-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m2.5 5 5.5-3 5.5 3L8 8 2.5 5Z"></path><path d="m2.5 8 5.5 3 5.5-3"></path><path d="m2.5 11 5.5 3 5.5-3"></path></svg></span>
+                    <span class="codicon codicon-chevron-down profile-chevron" aria-hidden="true"></span>
+                </button>
+                <div id="profileMenu" class="profile-menu" role="listbox" aria-label="Maven profiles" hidden></div>
+            </div>
         </div>
         <div id="summary" class="summary" aria-live="polite"></div>
         <div id="filterError" class="filter-error" hidden></div>
@@ -978,7 +1147,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const TOOLTIP_TITLE_PREFIX = '__MAVEN_TEST_EXPLORER_TOOLTIP_TITLE__';
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@passed', '@error', '@skipped', '@executed'];
-        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], availableProfiles: [], activeProfiles: [], profileDescriptions: {}, profileSources: {}, stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
         let filterTimer;
         let filterSuggestionItems = [];
         let filterSuggestionIndex = -1;
@@ -997,6 +1166,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         let submenuItems = [];
         let submenuIndex = -1;
         let submenuTrigger = null;
+        let profileMenuItems = [];
         let rowsRenderFrame;
         let durationLayoutFrame;
         let summaryElapsedTimer;
@@ -1009,6 +1179,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const filterEl = document.getElementById('filter');
         const filterHelpEl = document.getElementById('filterHelp');
         const filterShellEl = document.getElementById('filterShell');
+        const profilePickerEl = document.getElementById('profilePicker');
+        const profileButtonEl = document.getElementById('profileButton');
+        const profileMenuEl = document.getElementById('profileMenu');
         const filterSuggestionsEl = document.getElementById('filterSuggestions');
         const errorEl = document.getElementById('filterError');
         const copyMenuEl = document.getElementById('copyMenu');
@@ -1030,6 +1203,26 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         filterHelpEl.addEventListener('focus', () => scheduleNodeTooltip('filter-help', filterHelpText, filterHelpEl));
         filterHelpEl.addEventListener('blur', () => hideNodeTooltip('filter-help'));
         withInternalTooltip(clearFilterButton, 'clear-filter', 'Clear Filter');
+        withInternalTooltip(profileButtonEl, 'profile-picker', () => profileTooltip());
+
+        profileButtonEl.addEventListener('click', (event) => {
+            event.stopPropagation();
+            hideNodeTooltip('profile-picker');
+            if (profileMenuEl.hidden) {
+                showProfileMenu();
+            } else {
+                hideProfileMenu();
+            }
+        });
+        profileButtonEl.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                showProfileMenu(true);
+            } else if (event.key === 'Escape') {
+                hideProfileMenu();
+            }
+        });
+        profileMenuEl.addEventListener('keydown', handleProfileMenuKeydown);
 
         clearFilterButton.addEventListener('click', () => {
             filterEl.value = '';
@@ -1102,6 +1295,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 suppressFilterSuggestions = true;
                 hideFilterSuggestions();
             }
+            if (!profilePickerEl.contains(event.target)) {
+                hideProfileMenu();
+            }
         });
 
         window.addEventListener('message', event => {
@@ -1146,6 +1342,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             }
             clearFilterButton.hidden = !(state.filterText || filterEl.value);
             filterShellEl.classList.toggle('invalid', Boolean(state.filterError));
+            renderProfileButton();
             renderSummary();
             renderFilterError();
             renderRows(previousTop);
@@ -1343,6 +1540,169 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             filterSuggestionsEl.textContent = '';
             filterSuggestionItems = [];
             filterSuggestionIndex = -1;
+        }
+
+        function renderProfileButton() {
+            const activeProfiles = state.activeProfiles || [];
+            const active = activeProfiles.length > 0;
+            profileButtonEl.dataset.active = active ? 'true' : 'false';
+            if (active) {
+                profileButtonEl.style.setProperty('--profile-accent', profileColor(activeProfiles[0]));
+            } else {
+                profileButtonEl.style.removeProperty('--profile-accent');
+            }
+            const label = activeProfiles.length === 0
+                ? 'Select Maven profile; no profile active'
+                : activeProfiles.length === 1
+                    ? 'Select Maven profile; active: ' + activeProfiles[0]
+                    : 'Select Maven profile; active: ' + activeProfiles.join(', ');
+            profileButtonEl.setAttribute('aria-label', label);
+            if (!profileMenuEl.hidden) {
+                renderProfileMenu();
+            }
+        }
+
+        function profileTooltip() {
+            const activeProfiles = state.activeProfiles || [];
+            const activeLabel = activeProfiles.length > 0 ? activeProfiles.join(', ') : 'None';
+            return [
+                TOOLTIP_TITLE_PREFIX + 'Maven profile',
+                TOOLTIP_SEPARATOR,
+                'Active: ' + activeLabel,
+                'Applies to future test runs',
+            ].join(TOOLTIP_LINE_BREAK);
+        }
+
+        function showProfileMenu(focusItem = false) {
+            renderProfileMenu();
+            profileMenuEl.hidden = false;
+            profileButtonEl.setAttribute('aria-expanded', 'true');
+            if (focusItem) {
+                const selected = profileMenuItems.find(item => item.getAttribute('aria-selected') === 'true');
+                (selected || profileMenuItems[0])?.focus();
+            }
+        }
+
+        function hideProfileMenu(returnFocus = false) {
+            if (profileMenuEl.hidden) return;
+            hideNodeTooltip();
+            profileMenuEl.hidden = true;
+            profileButtonEl.setAttribute('aria-expanded', 'false');
+            profileMenuEl.textContent = '';
+            profileMenuItems = [];
+            if (returnFocus) profileButtonEl.focus();
+        }
+
+        function renderProfileMenu() {
+            profileMenuEl.textContent = '';
+            profileMenuItems = [];
+            const activeProfiles = new Set(state.activeProfiles || []);
+            profileMenuEl.appendChild(profileOption('No profile', '', activeProfiles.size === 0));
+            for (const profile of state.availableProfiles || []) {
+                profileMenuEl.appendChild(profileOption(profile, profile, activeProfiles.has(profile)));
+            }
+        }
+
+        function profileOption(label, value, selected) {
+            const row = document.createElement('div');
+            row.className = 'profile-option';
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'profile-option-select';
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', selected ? 'true' : 'false');
+            const dot = document.createElement('span');
+            dot.className = 'profile-color';
+            if (value) {
+                option.style.setProperty('--profile-color', profileColor(value));
+            }
+            const check = document.createElement('span');
+            check.className = 'profile-option-check';
+            check.textContent = selected ? '✓' : '';
+            option.append(dot, textSpan(label, 'profile-option-label'), check);
+            if (value) {
+                withInternalTooltip(option, 'profile-option:' + value, () => profileDescriptionTooltip(value));
+            }
+            option.addEventListener('click', () => {
+                state = { ...state, activeProfiles: value ? [value] : [] };
+                renderProfileButton();
+                hideProfileMenu();
+                post('selectProfile', { value });
+                profileButtonEl.focus();
+            });
+            profileMenuItems.push(option);
+            row.appendChild(option);
+            const source = value ? state.profileSources?.[value] : undefined;
+            if (source) {
+                const open = document.createElement('button');
+                open.type = 'button';
+                open.className = 'profile-option-open';
+                open.setAttribute('aria-label', 'Open ' + value + ' profile in pom.xml at line ' + source.line);
+                open.appendChild(iconSpan('codicon-go-to-file'));
+                withInternalTooltip(open, 'profile-source:' + value, 'Open profile in pom.xml');
+                open.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    hideProfileMenu();
+                    post('openProfile', { value });
+                });
+                row.appendChild(open);
+            }
+            return row;
+        }
+
+        function profileDescriptionTooltip(profile) {
+            const description = state.profileDescriptions?.[profile];
+            const lines = [TOOLTIP_TITLE_PREFIX + profile, TOOLTIP_SEPARATOR];
+            if (description) {
+                lines.push(description);
+            } else {
+                lines.push('No description found in pom.xml.');
+                lines.push('Add <mavenTestExplorer.profileDescription>...</mavenTestExplorer.profileDescription>');
+                lines.push("inside this profile's <properties> to show it here.");
+            }
+            return lines.join(TOOLTIP_LINE_BREAK);
+        }
+
+        function handleProfileMenuKeydown(event) {
+            const index = profileMenuItems.indexOf(document.activeElement);
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                profileMenuItems[(index + 1 + profileMenuItems.length) % profileMenuItems.length]?.focus();
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                profileMenuItems[(index - 1 + profileMenuItems.length) % profileMenuItems.length]?.focus();
+            } else if (event.key === 'Home') {
+                event.preventDefault();
+                profileMenuItems[0]?.focus();
+            } else if (event.key === 'End') {
+                event.preventDefault();
+                profileMenuItems[profileMenuItems.length - 1]?.focus();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                hideProfileMenu(true);
+            }
+        }
+
+        function profileColor(profile) {
+            const palette = [
+                'var(--vscode-charts-blue, #3794ff)',
+                'var(--vscode-charts-green, #89d185)',
+                'var(--vscode-charts-purple, #b180d7)',
+                'var(--vscode-charts-orange, #d18616)',
+                'var(--vscode-charts-yellow, #cca700)',
+                'var(--vscode-charts-red, #f14c4c)',
+                'var(--vscode-terminal-ansiBrightBlue, #3b8eea)',
+                'var(--vscode-terminal-ansiCyan, #11a8cd)',
+                'var(--vscode-terminal-ansiBrightGreen, #23d18b)',
+                'var(--vscode-terminal-ansiMagenta, #bc3fbc)',
+                'var(--vscode-terminal-ansiBrightMagenta, #d670d6)',
+                'var(--vscode-terminal-ansiBrightYellow, #f5f543)',
+            ];
+            let hash = 0;
+            for (let index = 0; index < profile.length; index++) {
+                hash = ((hash * 31) + profile.charCodeAt(index)) >>> 0;
+            }
+            return palette[hash % palette.length];
         }
 
         function renderSummary() {
@@ -2110,8 +2470,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 }
                 nodeTooltipEl.appendChild(item);
             }
-            nodeTooltipEl.hidden = false;
             const margin = 8;
+            // Give fixed-position tooltips the full viewport width before measuring them.
+            // Otherwise their initial static position beside a right-aligned anchor makes
+            // the browser shrink long content to the narrow space remaining on the right.
+            nodeTooltipEl.style.left = margin + 'px';
+            nodeTooltipEl.style.top = margin + 'px';
+            nodeTooltipEl.hidden = false;
             const anchorRect = anchorEl.getBoundingClientRect();
             const gap = 10;
             const maxLeft = window.innerWidth - nodeTooltipEl.offsetWidth - margin;
