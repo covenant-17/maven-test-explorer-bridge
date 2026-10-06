@@ -5,6 +5,7 @@ import * as path from 'path';
 import { ExtensionSettings } from './settings';
 import { SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR } from './constants';
 import { ensureNonRecursiveArgs } from './runPlanning';
+import { formatProgressDateTime } from './progressOutput';
 
 export interface MavenRunResult {
     readonly exitCode: number;
@@ -101,7 +102,9 @@ export function runMaven(
                     if (remaining !== undefined) {
                         parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
                     }
-                    outputChannel.appendLine(`[Progress] ${parts.join('  ')}`);
+                    outputChannel.appendLine(
+                        `[Progress] ${parts.join('  ')}  ${formatProgressDateTime(new Date())}`,
+                    );
                     progressHandlers?.onClassCompleted?.(m[5]);
                 }
             }
