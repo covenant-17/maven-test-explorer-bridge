@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.6] - 2026-10-07
+
+### Changed
+
+- Clicking a source method that contains generated invocations now both toggles its children and opens the Java declaration; clicking the chevron remains expansion-only.
+
 ## [1.1.5] - 2026-10-07
 
 ### Changed

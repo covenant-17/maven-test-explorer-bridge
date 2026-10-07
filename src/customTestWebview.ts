@@ -2427,7 +2427,11 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 selectNode(node.id);
                 if (hasChildren) {
                     setNodeExpanded(node.id, !expanded);
-                } else if (isLeafSourceMethod(node)) {
+                }
+                // A source method can also be a container for generated invocations.
+                // Clicking its row should keep source navigation while the dedicated
+                // twisty remains available for expand/collapse without navigation.
+                if (isSourceMethod(node)) {
                     post('openNode', { id: node.id });
                 }
             });
@@ -3021,9 +3025,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 && (node.kind === 'class' || node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle');
         }
 
-        function isLeafSourceMethod(node) {
-            const hasChildren = Boolean(node.children && node.children.length > 0);
-            return !hasChildren && (node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle');
+        function isSourceMethod(node) {
+            return Boolean(node.sourcePath)
+                && (node.kind === 'method' || node.kind === 'virtualMethod' || node.kind === 'lifecycle');
         }
 
         function revealNodeInView(id) {

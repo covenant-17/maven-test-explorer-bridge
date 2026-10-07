@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.5-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.6-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -75,7 +75,7 @@ Use the profile button to the right of the search field to activate any number o
 
 - Click a row to select it; use `Ctrl+Click` / `Cmd+Click` to toggle items and `Shift+Click` to select a range.
 - A parent and its selected descendants are deduplicated before Maven targets are generated.
-- Double-click a source-backed row or press `Enter` to open its Java declaration.
+- Click a source-backed method row to open its Java declaration. When the method contains generated invocations, the same click also expands or collapses them; click its chevron to change expansion without navigating. Double-click or press `Enter` to open other source-backed rows.
 - Press `Space` to run the focused row. Use the context-menu key or `Shift+F10` for row actions.
 - Right-click a multi-selection to run it as a group or open **Copy...** actions. **Copy Full Path** on a method includes both its selector and source anchor, for example `com.example.AppTest#wrongGreet() — C:\workspace\src\test\java\com\example\AppTest.java:67`.
 
