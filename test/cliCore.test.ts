@@ -4,10 +4,18 @@ import { buildStartRequest, exitCodeFor, helpText, parseArguments } from '../src
 
 test('general help documents every command and agent run option', () => {
     const help = helpText();
-    for (const value of ['status', 'config', 'run', 'output', 'wait', 'stop']) assert.match(help, new RegExp(value));
+    for (const value of ['status', 'config', 'profiles', 'run', 'output', 'wait', 'stop']) assert.match(help, new RegExp(value));
     for (const flag of ['--test', '--module', '--goal', '--profile', '--property', '--arg', '--clean-reports', '--no-clean-reports']) {
         assert.match(help, new RegExp(flag));
     }
+});
+
+test('parses persistent multi-profile selection and clearing', () => {
+    const selected = parseArguments(['profiles', '--profile', 'local', '--profile', 'parallel']);
+    assert.deepEqual(selected.options.get('profile'), ['local', 'parallel']);
+    const cleared = parseArguments(['profiles', '--clear']);
+    assert.equal(cleared.options.has('clear'), true);
+    assert.throws(() => parseArguments(['profiles', '--clear', '--profile', 'local']), /cannot|clear/i);
 });
 
 test('command help documents wait inputs', () => {

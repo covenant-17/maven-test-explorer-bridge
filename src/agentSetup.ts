@@ -9,6 +9,8 @@ export function buildAgentSetupPacket(options: AgentSetupPacketOptions): string 
     const mcpArgs = [options.mcpPath, '--workspace', options.workspace];
     const cliStatus = commandLine('node', [...cliArgs, 'status', '--workspace', options.workspace, '--json']);
     const cliConfig = commandLine('node', [...cliArgs, 'config', '--workspace', options.workspace, '--json']);
+    const cliProfiles = commandLine('node', [...cliArgs, 'profiles', '--workspace', options.workspace, '--json']);
+    const cliSetProfiles = commandLine('node', [...cliArgs, 'profiles', '--workspace', options.workspace, '--profile', '<profile>', '--json']);
     const cliRun = commandLine('node', [
         ...cliArgs,
         'run',
@@ -72,6 +74,8 @@ export function buildAgentSetupPacket(options: AgentSetupPacketOptions): string 
         '- Use the `maven_tests_*` MCP tools for Maven test runs whenever Maven Test Explorer is available.',
         '- Always call `maven_tests_get_status` before starting a run. Never start a second run while one is active.',
         '- Use `maven_tests_get_configuration` to discover modules and effective defaults instead of guessing them.',
+        '- Read `mavenProfiles` from configuration to distinguish available, selected, and currently active Maven profiles. Use `maven_tests_set_profiles` only when the task requires changing persistent profile selection.',
+        '- Maven profiles may define `<mavenTestExplorer.profileDescription>` inside their `<properties>`. Preserve or add a concise description when creating or materially changing a profile; Maven Test Explorer shows it in a `repository · profile` tooltip.',
         '- Unless the user supplies overrides, use the goals, profiles, properties, and report-cleaning behavior returned by the extension.',
         '- Start managed runs with `maven_tests_start`; do not invoke `mvn`, `mvnw`, or `mvnw.cmd` directly when managed tracking is required.',
         '- Wait for completion with `maven_tests_wait` using the returned run ID; use `maven_tests_get_status` and `maven_tests_get_output` only for intermediate progress or diagnostics.',
@@ -84,6 +88,9 @@ export function buildAgentSetupPacket(options: AgentSetupPacketOptions): string 
         'UPDATE FOR EXISTING AGENT SETUPS',
         '',
         'If Maven Test Explorer Agent Bridge was configured earlier, update the existing AGENTS.md or CLAUDE.md block now:',
+        '- read `mavenProfiles.available`, `mavenProfiles.selected`, and `mavenProfiles.active` from `maven_tests_get_configuration` instead of treating configured profiles as the complete effective Maven state;',
+        '- use `maven_tests_set_profiles` to persist one or more profiles, or an empty list to clear them; use the CLI `profiles` command as the fallback;',
+        '- profile-description tooltips are now supported through `<mavenTestExplorer.profileDescription>` in profile `<properties>` and are titled `repository · profile`;',
         '- add `maven_tests_wait` as the normal completion path instead of polling status in a loop;',
         '- consume the wait result\'s `failures` and `surefireSummary` (or the same fields under status `lastRun`) instead of reading Surefire XML or grepping output;',
         '- remove instructions that force `clean test` or report cleanup for agent runs; use the agent-specific defaults returned by configuration;',
@@ -97,6 +104,12 @@ export function buildAgentSetupPacket(options: AgentSetupPacketOptions): string 
         'CLI FALLBACK — READ CONFIGURATION',
         '```powershell',
         cliConfig,
+        '```',
+        '',
+        'CLI FALLBACK — READ OR CHANGE MAVEN PROFILES',
+        '```powershell',
+        cliProfiles,
+        cliSetProfiles,
         '```',
         '',
         'CLI FALLBACK — EXAMPLE MANAGED RUN',

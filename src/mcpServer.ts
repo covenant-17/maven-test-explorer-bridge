@@ -27,6 +27,13 @@ server.registerTool('maven_tests_get_configuration', {
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 }, async () => toolCall('get_configuration'));
 
+server.registerTool('maven_tests_set_profiles', {
+    title: 'Set Maven profiles',
+    description: 'Persist the Maven profiles used by future interactive and default agent test runs. Pass an empty array to clear the selection.',
+    inputSchema: { profiles: z.array(z.string().min(1)) },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+}, async (input) => toolCall('set_profiles', input));
+
 server.registerTool('maven_tests_start', {
     title: 'Start Maven tests',
     description: 'Start a managed Maven test run in the active Maven Test Explorer extension. Check status first.',

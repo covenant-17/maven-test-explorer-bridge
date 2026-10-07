@@ -9,11 +9,12 @@ export interface ParsedArguments {
     readonly options: Map<string, string[]>;
 }
 
-const COMMANDS = ['status', 'config', 'run', 'output', 'wait', 'stop'] as const;
+const COMMANDS = ['status', 'config', 'profiles', 'run', 'output', 'wait', 'stop'] as const;
 const COMMON_OPTIONS = new Set(['workspace', 'session', 'json']);
 const COMMAND_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     status: new Set(),
     config: new Set(),
+    profiles: new Set(['profile', 'clear']),
     run: new Set(['test', 'module', 'goal', 'profile', 'property', 'arg', 'clean-reports', 'no-clean-reports', 'label']),
     output: new Set(['run', 'tail']),
     wait: new Set(['run', 'timeout']),
@@ -44,6 +45,13 @@ async function execute(parsed: ParsedArguments): Promise<unknown> {
             return callAgentBridge(parsed.workspace, 'get_status', undefined, parsed.session);
         case 'config':
             return callAgentBridge(parsed.workspace, 'get_configuration', undefined, parsed.session);
+        case 'profiles':
+            if (!parsed.options.has('profile') && !parsed.options.has('clear')) {
+                return callAgentBridge(parsed.workspace, 'get_configuration', undefined, parsed.session);
+            }
+            return callAgentBridge(parsed.workspace, 'set_profiles', {
+                profiles: parsed.options.has('clear') ? [] : parsed.options.get('profile') ?? [],
+            }, parsed.session);
         case 'output':
             return callAgentBridge(parsed.workspace, 'get_output', {
                 runId: first(parsed.options, 'run'),
@@ -104,7 +112,7 @@ export function parseArguments(args: readonly string[]): ParsedArguments {
         if (!COMMON_OPTIONS.has(name) && !COMMAND_OPTIONS[command].has(name)) {
             throw new Error(`Unknown option for ${command}: --${name}`);
         }
-        if (name === 'json' || name === 'clean-reports' || name === 'no-clean-reports') {
+        if (name === 'json' || name === 'clean-reports' || name === 'no-clean-reports' || name === 'clear') {
             options.set(name, ['true']);
             continue;
         }
@@ -119,6 +127,8 @@ export function parseArguments(args: readonly string[]): ParsedArguments {
         required(options, 'run');
     } else if (command === 'output' && options.has('tail')) {
         numberOption(options, 'tail');
+    } else if (command === 'profiles' && options.has('clear') && options.has('profile')) {
+        throw new Error('--clear and --profile cannot be used together.');
     }
     return {
         command,
@@ -140,6 +150,12 @@ export function helpText(command?: string): string {
     const sections: Record<string, string> = {
         status: 'Usage: mteb status [global options]\n  Show the active managed run and the most recently completed run.',
         config: 'Usage: mteb config [global options]\n  Show Maven modules and effective safe Agent Bridge defaults.',
+        profiles: [
+            'Usage: mteb profiles [options] [global options]',
+            '  With no options, show available, selected, and currently active Maven profiles.',
+            '  --profile <profile>  Persist a selected profile; repeatable',
+            '  --clear              Clear all selected profiles',
+        ].join('\n'),
         run: [
             'Usage: mteb run [options] [global options]',
             '  --test <selector>       Run a test class or method; repeatable',
@@ -177,6 +193,7 @@ export function helpText(command?: string): string {
         'Commands:',
         '  status   Show managed-run status',
         '  config   Show modules and effective Agent Bridge defaults',
+        '  profiles Show or change persistent Maven profiles',
         '  run      Start a managed Maven test run',
         '  output   Read captured Maven output',
         '  wait     Wait for a managed run to finish',
@@ -187,6 +204,8 @@ export function helpText(command?: string): string {
         'Run `mteb <command> --help` for command-specific options.',
         '',
         sections.run.replace(/^Usage:[^\n]*\n/, ''),
+        '',
+        sections.profiles.replace(/^Usage:[^\n]*\n/, ''),
         '',
         sections.output.replace(/^Usage:[^\n]*\n/, ''),
         '',

@@ -23,6 +23,7 @@ import {
     clearReportDirectories,
     resolveExecutable,
     runMaven,
+    tokenizeArgs,
 } from './mavenRunner';
 import { readSettings } from './settings';
 import { determineRunOutcome, MavenExecutionRecord, reportsStillMatchLastRun } from './runPlanning';
@@ -104,6 +105,7 @@ import { bridgeError, RunCoordinator } from './runCoordinator';
 import { buildAgentSetupPacket } from './agentSetup';
 import { summarizeAgentRun } from './agentRunResults';
 import { ReportChangeTracker } from './reportChangeTracker';
+import { resolveActiveMavenProfiles } from './mavenProfileResolver';
 
 interface RunTarget {
     module: MavenModule;
@@ -153,6 +155,10 @@ let selectedNodePersistTimer: ReturnType<typeof setTimeout> | undefined;
 const runCoordinator = new RunCoordinator();
 let agentBridgeServer: AgentBridgeServer | undefined;
 let agentClientLaunchers: { cli: string; mcp: string } | undefined;
+let effectiveActiveProfiles: string[] = [];
+let activeProfileErrors: string[] = [];
+let activeProfilesResolving = false;
+let activeProfileResolutionGeneration = 0;
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
@@ -209,7 +215,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearResults: () => clearResults(context, false),
         clearResultsAndHistory: () => clearResults(context, true),
         showHistory: () => showHistory(context),
-        selectProfile: (profile) => selectProfile(profile),
+        selectProfiles: (profiles) => setSelectedProfiles(profiles),
         openProfile: (profile) => openProfile(profile),
         applyFilter: (value) => applyFilter(context, value),
         clearFilter: () => applyFilter(context, ''),
@@ -236,6 +242,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         if (event.affectsConfiguration(`mavenTestExplorer.${CONFIG_DEFAULT_PROFILES}`)) {
             rebuildTree();
+            void refreshEffectiveProfiles();
+        }
+        if (event.affectsConfiguration('mavenTestExplorer.additionalArgs')
+            || event.affectsConfiguration('mavenTestExplorer.mavenExecutable')
+            || event.affectsConfiguration('mavenTestExplorer.preferMavenWrapper')) {
+            void refreshEffectiveProfiles();
         }
     }));
 
@@ -290,6 +302,7 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
     inlineTestBridge.buildTree(modulesWithClasses);
     inlineResultFingerprint = '';
     rebuildTree();
+    void refreshEffectiveProfiles();
     if (showMessage) {
         vscode.window.showInformationMessage('Maven Test Explorer: Test tree refreshed.');
     }
@@ -319,8 +332,9 @@ function rebuildTree(): void {
     const activeProfiles = [...readSettings().defaultProfiles];
     const profileCatalog = buildMavenProfileCatalog(
         currentModules,
-        activeProfiles,
+        [...activeProfiles, ...effectiveActiveProfiles],
     );
+    const profileRepositories = profileRepositoriesForSources(profileCatalog.sources);
     provider?.updateState({
         roots: currentTree.filteredRoots,
         availableTags: collectProjectTags(currentTree.roots),
@@ -328,6 +342,10 @@ function rebuildTree(): void {
         filterFacets: collectFilterFacets(currentTree.roots),
         availableProfiles: profileCatalog.profiles,
         activeProfiles,
+        effectiveActiveProfiles,
+        activeProfilesResolving,
+        activeProfileErrors,
+        profileRepositories,
         profileDescriptions: profileCatalog.descriptions,
         profileSources: profileCatalog.sources,
         stats: currentTree.stats,
@@ -363,13 +381,54 @@ function rebuildTree(): void {
     syncInlineResults();
 }
 
-async function selectProfile(profile: string | undefined): Promise<void> {
+function profileRepositoriesForSources(
+    sources: Readonly<Record<string, { pomPath: string; line: number }>>,
+): Readonly<Record<string, string>> {
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    return Object.fromEntries(Object.entries(sources).flatMap(([profile, source]) => {
+        const owner = workspaceFolders
+            .filter((folder) => isPathInside(folder.uri.fsPath, source.pomPath))
+            .sort((left, right) => right.uri.fsPath.length - left.uri.fsPath.length)[0];
+        return owner ? [[profile, owner.name]] : [];
+    }));
+}
+
+async function setSelectedProfiles(profiles: readonly string[]): Promise<void> {
+    const normalized = Array.from(new Set(profiles.map((profile) => profile.trim()).filter(Boolean)));
     const configuration = vscode.workspace.getConfiguration('mavenTestExplorer');
     await configuration.update(
         CONFIG_DEFAULT_PROFILES,
-        profile ? [profile] : [],
+        normalized,
         vscode.ConfigurationTarget.Workspace,
     );
+    rebuildTree();
+}
+
+async function refreshEffectiveProfiles(): Promise<void> {
+    const generation = ++activeProfileResolutionGeneration;
+    const settings = readSettings();
+    const reactorRoots = buildReactorGroups(currentModules).map((group) => group.executionModule);
+    activeProfilesResolving = reactorRoots.length > 0;
+    activeProfileErrors = [];
+    rebuildTree();
+    const results = await Promise.all(reactorRoots.map(async (module) => {
+        const executable = resolveExecutable(settings, module.moduleDir);
+        const result = await resolveActiveMavenProfiles(
+            module.moduleDir,
+            executable,
+            settings.defaultProfiles,
+            tokenizeArgs(settings.additionalArgs),
+        );
+        return { module, result };
+    }));
+    if (generation !== activeProfileResolutionGeneration) return;
+    effectiveActiveProfiles = Array.from(new Set(results.flatMap(({ result }) => result.profiles)))
+        .sort((left, right) => left.localeCompare(right));
+    activeProfileErrors = results
+        .filter(({ result }) => result.error)
+        .map(({ module, result }) => `${module.artifactId}: ${result.error}`);
+    activeProfilesResolving = false;
+    for (const error of activeProfileErrors) outputChannel.appendLine(`[Profiles] ${error}`);
     rebuildTree();
 }
 
@@ -1137,6 +1196,19 @@ async function handleAgentRequest(context: vscode.ExtensionContext, request: Age
             return runCoordinator.getStatus();
         case 'get_configuration':
             return agentConfiguration();
+        case 'set_profiles': {
+            const params = asRecord(request.params);
+            if (!Array.isArray(params.profiles)
+                || !params.profiles.every((profile) => typeof profile === 'string'
+                    && profile.trim().length > 0
+                    && !/[\0\r\n,]/.test(profile))) {
+                throw bridgeError('INVALID_REQUEST', 'profiles must be an array of non-empty strings.');
+            }
+            const requested = Array.from(new Set((params.profiles as string[]).map((profile) => profile.trim())));
+            await setSelectedProfiles(requested);
+            await refreshEffectiveProfiles();
+            return agentConfiguration();
+        }
         case 'get_output': {
             const params = asRecord(request.params);
             const tailLines = typeof params.tailLines === 'number' ? params.tailLines : 200;
@@ -1197,6 +1269,10 @@ async function handleAgentRequest(context: vscode.ExtensionContext, request: Age
 
 function agentConfiguration(): AgentConfigurationSnapshot {
     const settings = readSettings();
+    const profileCatalog = buildMavenProfileCatalog(currentModules, [
+        ...settings.defaultProfiles,
+        ...effectiveActiveProfiles,
+    ]);
     return {
         workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
         modules: currentModules.map((module) => ({
@@ -1209,6 +1285,13 @@ function agentConfiguration(): AgentConfigurationSnapshot {
             profiles: [...settings.defaultProfiles],
             additionalArgs: settings.additionalArgs,
             cleanReports: settings.agentClearReportsBeforeRun,
+        },
+        mavenProfiles: {
+            available: profileCatalog.profiles,
+            selected: [...settings.defaultProfiles],
+            active: [...effectiveActiveProfiles],
+            resolving: activeProfilesResolving,
+            errors: [...activeProfileErrors],
         },
     };
 }
@@ -2078,6 +2161,7 @@ function refreshMavenProfileMetadata(changedPomPaths: ReadonlySet<string>): void
     if (changed) {
         outputChannel.appendLine('[Extension] Maven profiles changed, updating profile picker...');
         rebuildTree();
+        void refreshEffectiveProfiles();
     }
 }
 

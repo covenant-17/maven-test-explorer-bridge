@@ -279,7 +279,7 @@ function applyTemplate(
     return tokenizeArgs(expanded);
 }
 
-function tokenizeArgs(value: string): string[] {
+export function tokenizeArgs(value: string): string[] {
     const tokens: string[] = [];
     const re = /"([^"]*)"|'([^']*)'|([^\s]+)/g;
     for (const match of value.matchAll(re)) {

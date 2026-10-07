@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 
-export const AGENT_PROTOCOL_VERSION = 2;
+export const AGENT_PROTOCOL_VERSION = 3;
 export const OUTPUT_BUFFER_LIMIT = 1024 * 1024;
 
 export type RunSource = 'webview' | 'testing-api' | 'agent';
@@ -69,6 +69,13 @@ export interface AgentConfigurationSnapshot {
         readonly additionalArgs: string;
         readonly cleanReports: boolean;
     };
+    readonly mavenProfiles: {
+        readonly available: readonly string[];
+        readonly selected: readonly string[];
+        readonly active: readonly string[];
+        readonly resolving: boolean;
+        readonly errors: readonly string[];
+    };
 }
 
 export interface AgentBridgeDescriptor {
@@ -82,7 +89,7 @@ export interface AgentBridgeDescriptor {
     readonly createdAt: number;
 }
 
-export type AgentOperation = 'get_status' | 'get_configuration' | 'start_run' | 'get_output' | 'wait_for_run' | 'stop_run';
+export type AgentOperation = 'get_status' | 'get_configuration' | 'set_profiles' | 'start_run' | 'get_output' | 'wait_for_run' | 'stop_run';
 
 export interface AgentRequest {
     readonly id: string;

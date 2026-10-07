@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.1-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.2-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -21,7 +21,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Surefire and Failsafe result mapping** — show passed, failed, errored, skipped, and total counts while retaining source navigation and error details.
 - **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
 - **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
-- **Interactive Maven profiles** — select a color-coded profile beside the search field; profiles and optional descriptions are discovered from workspace POMs.
+- **Interactive Maven profiles** — select one or more color-coded profiles beside the search field; the extension also resolves the profiles Maven actually activates.
 - **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
 - **Run History** — store and restore completed, failed, or cancelled result sets per workspace, or switch back to the pinned current run while Maven is active.
@@ -54,7 +54,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 
 By default the extension prefers the Maven Wrapper and falls back to `mvn`. Change the executable, goals, profiles, arguments, source globs, or report globs when the project uses a different layout.
 
-Use the profile button to the right of the search field to activate one discovered Maven profile for subsequent runs. Saved POM changes refresh profile metadata after a short debounce without rescanning Java tests. Profile colors are assigned deterministically from VS Code theme colors. Hover a profile to read `<mavenTestExplorer.profileDescription>` from that profile's `<properties>` in `pom.xml`; profiles without one show the supported markup. The source button pinned to a declared profile opens its `<profile>` line in the owning POM. A direct custom `<description>` is also read for compatibility, although Maven itself rejects that non-standard profile element.
+Use the profile button to the right of the search field to activate any number of discovered Maven profiles for subsequent runs. The tooltip distinguishes the persistent selection from profiles Maven currently activates through the POM, `settings.xml`, properties, JDK, and other activation rules; effective state is resolved with `help:active-profiles`. Saved POM changes refresh profile metadata and effective state after a short debounce without rescanning Java tests. Profile colors are assigned deterministically from VS Code theme colors. Hover a profile to read `<mavenTestExplorer.profileDescription>` from that profile's `<properties>` in `pom.xml`; profiles without one show the supported markup. The source button pinned to a declared profile opens its `<profile>` line in the owning POM. A direct custom `<description>` is also read for compatibility, although Maven itself rejects that non-standard profile element.
 
 ## Using the Explorer
 
@@ -177,6 +177,9 @@ CLI examples (replace `mteb-cli.cjs` with the copied installed path):
 node mteb-cli.cjs --help
 node mteb-cli.cjs status --workspace . --json
 node mteb-cli.cjs config --workspace . --json
+node mteb-cli.cjs profiles --workspace . --json
+node mteb-cli.cjs profiles --workspace . --profile local --profile parallel --json
+node mteb-cli.cjs profiles --workspace . --clear --json
 node mteb-cli.cjs run --workspace . --goal test --profile parallel --property HEADLESS=true --json
 node mteb-cli.cjs run --workspace . --test LoginTest --test ProfileMenuNavigationTest --property HEADLESS=true --json
 node mteb-cli.cjs wait --workspace . --run <run-id> --timeout 300 --json
@@ -190,6 +193,7 @@ The bundled stdio MCP server provides these tools:
 
 - `maven_tests_get_status`
 - `maven_tests_get_configuration`
+- `maven_tests_set_profiles`
 - `maven_tests_start`
 - `maven_tests_wait`
 - `maven_tests_get_output`

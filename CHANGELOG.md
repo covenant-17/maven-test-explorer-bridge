@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.2] - 2026-10-07
+
+### Added
+
+- Added effective Maven profile detection, including profiles activated outside the extension selection.
+- Added Agent Bridge CLI and MCP operations for reading and changing persistent profile selection.
+
+### Changed
+
+- The profile picker now supports selecting multiple profiles at once and distinguishes selected profiles from profiles Maven currently reports as active.
+- Profile rows are informational; dedicated plus/check actions toggle selection without closing the menu, enabling rapid multi-selection.
+- Profile tooltips qualify profile names with their owning workspace repository, for example `repository · someProfile`, without changing dropdown labels.
+
 ## [1.1.1] - 2026-10-06
 
 ### Added

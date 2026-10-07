@@ -32,6 +32,10 @@ export interface WebviewState {
     filterFacets: readonly (readonly string[])[];
     availableProfiles: readonly string[];
     activeProfiles: readonly string[];
+    effectiveActiveProfiles: readonly string[];
+    activeProfilesResolving: boolean;
+    activeProfileErrors: readonly string[];
+    profileRepositories: Readonly<Record<string, string>>;
     profileDescriptions: Readonly<Record<string, string>>;
     profileSources: Readonly<Record<string, { pomPath: string; line: number }>>;
     stats: CustomNodeStats;
@@ -58,7 +62,7 @@ export interface WebviewHandlers {
     clearResults(): void | Promise<void>;
     clearResultsAndHistory(): void | Promise<void>;
     showHistory(): void | Promise<void>;
-    selectProfile(profile?: string): void | Promise<void>;
+    selectProfiles(profiles: readonly string[]): void | Promise<void>;
     openProfile(profile: string): void | Promise<void>;
     applyFilter(value: string): void | Promise<void>;
     clearFilter(): void | Promise<void>;
@@ -79,6 +83,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         filterFacets: [],
         availableProfiles: [],
         activeProfiles: [],
+        effectiveActiveProfiles: [],
+        activeProfilesResolving: false,
+        activeProfileErrors: [],
+        profileRepositories: {},
         profileDescriptions: {},
         profileSources: {},
         stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 },
@@ -159,7 +167,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 await this.handlers.showHistory();
                 break;
             case 'selectProfile':
-                await this.handlers.selectProfile(message.value?.trim() || undefined);
+                await this.handlers.selectProfiles(message.profiles ?? []);
                 break;
             case 'openProfile':
                 if (message.value) { await this.handlers.openProfile(message.value); }
@@ -371,12 +379,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             background: transparent;
             border: 0;
             text-align: left;
-            cursor: pointer;
+            cursor: default;
+            user-select: none;
         }
-        .profile-option-select:focus-visible,
+        .profile-option-toggle:focus-visible,
         .profile-option-open:focus-visible {
             outline: 0;
         }
+        .profile-option-toggle,
         .profile-option-open {
             width: 27px;
             height: 22px;
@@ -391,6 +401,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             border-left: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-menu-border, transparent));
             cursor: pointer;
         }
+        .profile-option-toggle:hover,
         .profile-option-open:hover {
             background: var(--vscode-toolbar-hoverBackground);
         }
@@ -408,11 +419,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .profile-option-check {
-            width: 14px;
-            margin-left: auto;
-            color: var(--profile-color, var(--vscode-foreground));
-            text-align: center;
+        .profile-effective {
+            padding-left: 8px;
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
         }
         .filter {
             flex: 1 1 auto;
@@ -549,6 +559,8 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .codicon-event::before { content: "\\ea86"; }
         .codicon-root::before { content: "\\ea65"; }
         .codicon-type-hierarchy-sub::before { content: "\\ebba"; }
+        .codicon-add::before { content: "\\ea60"; }
+        .codicon-check::before { content: "\\eab2"; }
         .codicon-empty::before { content: ""; }
         .summary {
             flex: 0 0 auto;
@@ -1124,7 +1136,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                     <span class="profile-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m2.5 5 5.5-3 5.5 3L8 8 2.5 5Z"></path><path d="m2.5 8 5.5 3 5.5-3"></path><path d="m2.5 11 5.5 3 5.5-3"></path></svg></span>
                     <span class="codicon codicon-chevron-down profile-chevron" aria-hidden="true"></span>
                 </button>
-                <div id="profileMenu" class="profile-menu" role="listbox" aria-label="Maven profiles" hidden></div>
+                <div id="profileMenu" class="profile-menu" role="listbox" aria-label="Maven profiles" aria-multiselectable="true" hidden></div>
             </div>
         </div>
         <div id="summary" class="summary" aria-live="polite"></div>
@@ -1147,7 +1159,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const TOOLTIP_TITLE_PREFIX = '__MAVEN_TEST_EXPLORER_TOOLTIP_TITLE__';
         const TOOLTIP_DELAY_MS = 1000;
         const SYSTEM_FILTERS = ['@failed', '@passed', '@error', '@skipped', '@executed'];
-        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], availableProfiles: [], activeProfiles: [], profileDescriptions: {}, profileSources: {}, stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
+        let state = { roots: [], availableTags: [], availableAnnotations: [], filterFacets: [], availableProfiles: [], activeProfiles: [], effectiveActiveProfiles: [], activeProfilesResolving: false, activeProfileErrors: [], profileRepositories: {}, profileDescriptions: {}, profileSources: {}, stats: { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 }, expandedIds: [], running: false, runSummary: { currentClasses: [], completedClasses: 0, totalClasses: 0 }, filterText: '', viewMode: 'tree', sortMode: 'location', sortDirection: 'asc', treeVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], listVisibleParts: ['expander', 'status', 'kindIcon', 'name', 'metadata', 'duration', 'stats'], treeMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'], listMetadataParts: ['description', 'tags', 'inheritance', 'classContext', 'virtualHint'] };
         let filterTimer;
         let filterSuggestionItems = [];
         let filterSuggestionIndex = -1;
@@ -1552,10 +1564,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 profileButtonEl.style.removeProperty('--profile-accent');
             }
             const label = activeProfiles.length === 0
-                ? 'Select Maven profile; no profile active'
+                ? 'Select Maven profiles; no profiles selected'
                 : activeProfiles.length === 1
-                    ? 'Select Maven profile; active: ' + activeProfiles[0]
-                    : 'Select Maven profile; active: ' + activeProfiles.join(', ');
+                    ? 'Select Maven profiles; selected: ' + activeProfiles[0]
+                    : 'Select Maven profiles; selected: ' + activeProfiles.join(', ');
             profileButtonEl.setAttribute('aria-label', label);
             if (!profileMenuEl.hidden) {
                 renderProfileMenu();
@@ -1563,13 +1575,23 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         function profileTooltip() {
-            const activeProfiles = state.activeProfiles || [];
-            const activeLabel = activeProfiles.length > 0 ? activeProfiles.join(', ') : 'None';
-            return [
-                TOOLTIP_TITLE_PREFIX + 'Maven profile',
+            const selectedProfiles = state.activeProfiles || [];
+            const effectiveProfiles = state.effectiveActiveProfiles || [];
+            const effectiveLabel = state.activeProfilesResolving
+                ? 'Resolving...'
+                : effectiveProfiles.length > 0 ? effectiveProfiles.join(', ') : 'None';
+            const lines = [
+                TOOLTIP_TITLE_PREFIX + 'Maven profiles',
                 TOOLTIP_SEPARATOR,
-                'Active: ' + activeLabel,
-                'Applies to future test runs',
+                'Selected for runs: ' + (selectedProfiles.length > 0 ? selectedProfiles.join(', ') : 'None'),
+                'Currently active in Maven: ' + effectiveLabel,
+            ];
+            if (state.activeProfileErrors?.length) {
+                lines.push('Detection error: ' + state.activeProfileErrors.join('; '));
+            }
+            return [
+                ...lines,
+                'Selections apply to future test runs',
             ].join(TOOLTIP_LINE_BREAK);
         }
 
@@ -1578,7 +1600,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             profileMenuEl.hidden = false;
             profileButtonEl.setAttribute('aria-expanded', 'true');
             if (focusItem) {
-                const selected = profileMenuItems.find(item => item.getAttribute('aria-selected') === 'true');
+                const selected = profileMenuItems.find(item => item.dataset.selected === 'true');
                 (selected || profileMenuItems[0])?.focus();
             }
         }
@@ -1597,7 +1619,6 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             profileMenuEl.textContent = '';
             profileMenuItems = [];
             const activeProfiles = new Set(state.activeProfiles || []);
-            profileMenuEl.appendChild(profileOption('No profile', '', activeProfiles.size === 0));
             for (const profile of state.availableProfiles || []) {
                 profileMenuEl.appendChild(profileOption(profile, profile, activeProfiles.has(profile)));
             }
@@ -1606,32 +1627,47 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function profileOption(label, value, selected) {
             const row = document.createElement('div');
             row.className = 'profile-option';
-            const option = document.createElement('button');
-            option.type = 'button';
+            row.setAttribute('role', 'option');
+            row.setAttribute('aria-selected', selected ? 'true' : 'false');
+            const option = document.createElement('div');
             option.className = 'profile-option-select';
-            option.setAttribute('role', 'option');
-            option.setAttribute('aria-selected', selected ? 'true' : 'false');
             const dot = document.createElement('span');
             dot.className = 'profile-color';
             if (value) {
                 option.style.setProperty('--profile-color', profileColor(value));
             }
-            const check = document.createElement('span');
-            check.className = 'profile-option-check';
-            check.textContent = selected ? '✓' : '';
-            option.append(dot, textSpan(label, 'profile-option-label'), check);
-            if (value) {
-                withInternalTooltip(option, 'profile-option:' + value, () => profileDescriptionTooltip(value));
+            option.append(dot, textSpan(label, 'profile-option-label'));
+            if (value && (state.effectiveActiveProfiles || []).includes(value)) {
+                option.append(textSpan('active', 'profile-effective'));
             }
-            option.addEventListener('click', () => {
-                state = { ...state, activeProfiles: value ? [value] : [] };
-                renderProfileButton();
-                hideProfileMenu();
-                post('selectProfile', { value });
-                profileButtonEl.focus();
-            });
-            profileMenuItems.push(option);
+            withInternalTooltip(option, 'profile-option:' + value, () => profileDescriptionTooltip(value));
             row.appendChild(option);
+
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'profile-option-toggle';
+            toggle.dataset.profile = value;
+            toggle.dataset.selected = selected ? 'true' : 'false';
+            toggle.setAttribute('aria-label', (selected ? 'Deselect ' : 'Select ') + value + ' Maven profile');
+            toggle.setAttribute('aria-pressed', selected ? 'true' : 'false');
+            toggle.appendChild(iconSpan(selected ? 'codicon-check' : 'codicon-add'));
+            withInternalTooltip(toggle, 'profile-toggle:' + value, selected ? 'Deselect profile' : 'Select profile');
+            toggle.addEventListener('click', (event) => {
+                event.stopPropagation();
+                hideNodeTooltip('profile-toggle:' + value);
+                const nextProfiles = new Set(state.activeProfiles || []);
+                if (nextProfiles.has(value)) {
+                    nextProfiles.delete(value);
+                } else {
+                    nextProfiles.add(value);
+                }
+                state = { ...state, activeProfiles: Array.from(nextProfiles) };
+                renderProfileButton();
+                post('selectProfile', { profiles: state.activeProfiles });
+                profileMenuItems.find(item => item.dataset.profile === value)?.focus();
+            });
+            profileMenuItems.push(toggle);
+            row.appendChild(toggle);
             const source = value ? state.profileSources?.[value] : undefined;
             if (source) {
                 const open = document.createElement('button');
@@ -1652,7 +1688,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function profileDescriptionTooltip(profile) {
             const description = state.profileDescriptions?.[profile];
-            const lines = [TOOLTIP_TITLE_PREFIX + profile, TOOLTIP_SEPARATOR];
+            const repository = state.profileRepositories?.[profile];
+            const qualifiedProfile = repository ? repository + ' · ' + profile : profile;
+            const lines = [TOOLTIP_TITLE_PREFIX + qualifiedProfile, TOOLTIP_SEPARATOR];
             if (description) {
                 lines.push(description);
             } else {
@@ -3157,6 +3195,7 @@ interface WebviewMessage {
     id?: string;
     ids?: string[];
     value?: string;
+    profiles?: string[];
     target?: 'test' | 'class';
     expanded?: boolean;
     kind?: string;

@@ -40,7 +40,12 @@ if (showTooltipStart < 0 || tooltipPositionReset < showTooltipStart || tooltipPo
 for (const profilePickerInvariant of [
     'id="profileButton"',
     'function profileDescriptionTooltip(profile)',
-    "post('selectProfile', { value })",
+    "repository + ' · ' + profile",
+    "iconSpan(selected ? 'codicon-check' : 'codicon-add')",
+    '.codicon-add::before { content: "\\\\ea60"; }',
+    '.codicon-check::before { content: "\\\\eab2"; }',
+    "toggle.addEventListener('click'",
+    "post('selectProfile', { profiles: state.activeProfiles })",
     "post('openProfile', { value })",
 ]) {
     if (!source.includes(profilePickerInvariant)) {
