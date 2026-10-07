@@ -1,7 +1,7 @@
 import * as path from 'path';
 import type { MavenModule } from './mavenProjectDetector';
 import { moduleItemId, resolveModuleForResult } from './mavenModule';
-import { buildFqcn, SourceAnnotation, TestClassInfo } from './javaTestScanner';
+import type { SourceAnnotation, TestClassInfo } from './javaTestScanner';
 import { SuiteResult, TestCaseResult, TestCaseStatus } from './surefireParser';
 import { parseFilterExpression, TestFilterExpression } from './filterExpression';
 import { matchesStatusFilter } from './statusFilter';
@@ -73,6 +73,10 @@ export interface CustomTreeRuntimeState {
 }
 
 const EMPTY_STATS: CustomNodeStats = { passed: 0, failed: 0, error: 0, skipped: 0, total: 0 };
+
+function buildFqcn(packageName: string, className: string): string {
+    return packageName ? `${packageName}.${className}` : className;
+}
 
 export function buildCustomTree(
     modulesWithClasses: readonly ModuleClasses[],
@@ -336,12 +340,15 @@ function materializeResults(
             const virtualId = `${classNode.id}#${encodeURIComponent(tc.methodName)}`;
             let node = nodesById.get(virtualId);
             if (!node) {
+                const resultParent = parentMethod && kind === 'virtualMethod'
+                    ? parentMethod
+                    : classNode;
                 node = createNode({
                     id: virtualId,
                     kind,
                     label: kind === 'lifecycle' ? tc.methodName : `${tc.methodName}()`,
                     description: kind === 'virtualMethod' ? 'virtual; opens parent' : undefined,
-                    parentId: classNode.id,
+                    parentId: resultParent.id,
                     module,
                     packageName: classNode.packageName,
                     fqcn: tc.className,
@@ -355,7 +362,7 @@ function materializeResults(
                     isVirtual: kind === 'virtualMethod',
                     virtualParentId: parentMethod?.id,
                 });
-                classNode.children.push(node);
+                resultParent.children.push(node);
                 nodesById.set(node.id, node);
             }
             applyCaseResult(node, tc);

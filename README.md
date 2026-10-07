@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.4-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.5-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -15,7 +15,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 
 ## Features
 
-- **Dedicated Tree and List views** — browse deterministic project, package, class, method, dynamic-invocation, and lifecycle nodes.
+- **Dedicated Tree and List views** — browse deterministic project, package, class, method, dynamic-invocation, and lifecycle nodes, with generated invocations grouped beneath their source method in Tree view.
 - **Reactor-aware multi-module discovery** — locate Maven modules across multi-root workspaces and execute each top-level reactor only once.
 - **JUnit 5 source discovery** — recognize `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, nested classes, and inherited test-interface methods.
 - **Surefire and Failsafe result mapping** — show passed, failed, errored, skipped, and total counts while retaining source navigation and error details.

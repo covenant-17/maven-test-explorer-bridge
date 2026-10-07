@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.5] - 2026-10-07
+
+### Changed
+
+- Parameterized and generated test invocations now appear beneath their source method in Tree view, making their shared origin and aggregate result immediately visible.
+
 ## [1.1.4] - 2026-10-07
 
 ### Added
