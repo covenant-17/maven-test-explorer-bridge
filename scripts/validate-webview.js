@@ -39,6 +39,7 @@ if (showTooltipStart < 0 || tooltipPositionReset < showTooltipStart || tooltipPo
 
 for (const profilePickerInvariant of [
     'id="profileButton"',
+    'id="profileCount"',
     'function profileDescriptionTooltip(profile)',
     "repository + ' · ' + profile",
     "iconSpan(selected ? 'codicon-check' : 'codicon-add')",
@@ -47,6 +48,10 @@ for (const profilePickerInvariant of [
     "toggle.addEventListener('click'",
     "post('selectProfile', { profiles: state.activeProfiles })",
     "post('openProfile', { value })",
+    "profileButtonEl.dataset.multiple = multiple ? 'true' : 'false'",
+    'profileCountEl.hidden = !multiple',
+    "activeProfiles.length > 9 ? '9+' : String(activeProfiles.length)",
+    '.profile-button[data-multiple="true"]',
 ]) {
     if (!source.includes(profilePickerInvariant)) {
         throw new Error(`Missing Maven profile picker invariant: ${profilePickerInvariant}`);

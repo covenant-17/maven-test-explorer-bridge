@@ -298,9 +298,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             border-color: var(--profile-accent);
             border-color: color-mix(in srgb, var(--profile-accent) 70%, var(--vscode-input-background));
         }
-        .profile-button[data-active="true"] .profile-icon {
+        .profile-button[data-active="true"][data-multiple="false"] .profile-icon {
             color: var(--profile-accent);
             color: color-mix(in srgb, var(--profile-accent) 70%, var(--vscode-input-background));
+        }
+        .profile-button[data-multiple="true"] {
+            border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder));
+            border-color: color-mix(in srgb, var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder)) 55%, var(--vscode-input-background));
         }
         .profile-button:hover,
         .profile-button[aria-expanded="true"] {
@@ -309,6 +313,13 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .profile-button:focus-visible {
             outline: 1px solid var(--vscode-focusBorder);
             outline-offset: 1px;
+        }
+        .profile-icon-wrap {
+            width: 16px;
+            height: 16px;
+            position: relative;
+            display: inline-flex;
+            flex: 0 0 16px;
         }
         .profile-icon {
             width: 16px;
@@ -324,6 +335,27 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             stroke-width: 1.35;
             stroke-linecap: round;
             stroke-linejoin: round;
+        }
+        .profile-count {
+            position: absolute;
+            bottom: -5px;
+            right: -2px;
+            min-width: 13px;
+            height: 13px;
+            box-sizing: border-box;
+            padding: 0 3px;
+            border: 1px solid var(--vscode-input-background);
+            border-radius: 7px;
+            color: var(--vscode-badge-foreground);
+            background: var(--vscode-badge-background);
+            font-size: 9px;
+            font-weight: 600;
+            line-height: 11px;
+            text-align: center;
+            pointer-events: none;
+        }
+        .profile-count[hidden] {
+            display: none;
         }
         .profile-chevron {
             width: 12px;
@@ -1133,7 +1165,10 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
             </div>
             <div id="profilePicker" class="profile-picker">
                 <button id="profileButton" class="profile-button" type="button" aria-label="Select Maven profile" aria-haspopup="listbox" aria-expanded="false">
-                    <span class="profile-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m2.5 5 5.5-3 5.5 3L8 8 2.5 5Z"></path><path d="m2.5 8 5.5 3 5.5-3"></path><path d="m2.5 11 5.5 3 5.5-3"></path></svg></span>
+                    <span class="profile-icon-wrap" aria-hidden="true">
+                        <span class="profile-icon"><svg viewBox="0 0 16 16"><path d="m2.5 5 5.5-3 5.5 3L8 8 2.5 5Z"></path><path d="m2.5 8 5.5 3 5.5-3"></path><path d="m2.5 11 5.5 3 5.5-3"></path></svg></span>
+                        <span id="profileCount" class="profile-count" hidden></span>
+                    </span>
                     <span class="codicon codicon-chevron-down profile-chevron" aria-hidden="true"></span>
                 </button>
                 <div id="profileMenu" class="profile-menu" role="listbox" aria-label="Maven profiles" aria-multiselectable="true" hidden></div>
@@ -1193,6 +1228,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         const filterShellEl = document.getElementById('filterShell');
         const profilePickerEl = document.getElementById('profilePicker');
         const profileButtonEl = document.getElementById('profileButton');
+        const profileCountEl = document.getElementById('profileCount');
         const profileMenuEl = document.getElementById('profileMenu');
         const filterSuggestionsEl = document.getElementById('filterSuggestions');
         const errorEl = document.getElementById('filterError');
@@ -1557,8 +1593,12 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function renderProfileButton() {
             const activeProfiles = state.activeProfiles || [];
             const active = activeProfiles.length > 0;
+            const multiple = activeProfiles.length > 1;
             profileButtonEl.dataset.active = active ? 'true' : 'false';
-            if (active) {
+            profileButtonEl.dataset.multiple = multiple ? 'true' : 'false';
+            profileCountEl.hidden = !multiple;
+            profileCountEl.textContent = multiple ? (activeProfiles.length > 9 ? '9+' : String(activeProfiles.length)) : '';
+            if (active && !multiple) {
                 profileButtonEl.style.setProperty('--profile-accent', profileColor(activeProfiles[0]));
             } else {
                 profileButtonEl.style.removeProperty('--profile-accent');

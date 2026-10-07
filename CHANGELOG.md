@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.4] - 2026-10-07
+
+### Added
+
+- Added a compact count badge to the Maven profile picker when multiple profiles are selected.
+
+### Changed
+
+- Multiple-profile selection now uses a neutral active accent so no single profile appears visually dominant.
+
 ## [1.1.3] - 2026-10-07
 
 ### Added
