@@ -106,6 +106,9 @@ import { buildAgentSetupPacket } from './agentSetup';
 import { summarizeAgentRun } from './agentRunResults';
 import { ReportChangeTracker } from './reportChangeTracker';
 import { resolveActiveMavenProfiles } from './mavenProfileResolver';
+import { buildRunProgressLabels } from './runtimeVisuals';
+import { formatRunSummary } from './progressOutput';
+import { pruneAgentClientCache } from './agentClientCache';
 
 interface RunTarget {
     module: MavenModule;
@@ -129,7 +132,7 @@ interface FailedClassTarget {
     readonly fqcn: string;
 }
 
-let outputChannel: vscode.OutputChannel;
+let outputChannel: vscode.LogOutputChannel;
 let currentModules: MavenModule[] = [];
 let modulesWithClasses: ModuleClasses[] = [];
 let currentTree: CustomTreeSnapshot = emptyTree();
@@ -159,6 +162,9 @@ let effectiveActiveProfiles: string[] = [];
 let activeProfileErrors: string[] = [];
 let activeProfilesResolving = false;
 let activeProfileResolutionGeneration = 0;
+let runStatusBarItem: vscode.StatusBarItem;
+let activeViewProgress: vscode.Progress<{ message?: string; increment?: number }> | undefined;
+let resolveViewProgress: (() => void) | undefined;
 
 const resultCache = new Map<string, SuiteResult>();
 const expandedIds = new Set<string>();
@@ -181,11 +187,15 @@ let inlineTestBridge: InlineTestBridge;
 let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
+    runStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    runStatusBarItem.name = 'Maven Test Explorer Run';
+    runStatusBarItem.command = `${CUSTOM_VIEW_ID}.focus`;
+    context.subscriptions.push(runStatusBarItem);
     agentClientLaunchers = provisionAgentClients(context);
     void vscode.commands.executeCommand('setContext', 'mavenTestExplorer.running', false);
     context.subscriptions.push(outputChannel);
-    outputChannel.appendLine('[Extension] Maven Test Explorer activating custom view...');
+    outputChannel.debug('[Extension] Maven Test Explorer activating custom view...');
 
     inlineController = vscode.tests.createTestController(EXTENSION_ID, CONTROLLER_LABEL);
     inlineTestBridge = new InlineTestBridge(inlineController);
@@ -265,16 +275,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             });
             const descriptor = await agentBridgeServer.start();
             context.subscriptions.push(new vscode.Disposable(() => { void agentBridgeServer?.dispose(); }));
-            outputChannel.appendLine(`[Agent Bridge] Ready for session ${descriptor.sessionId}`);
+            outputChannel.debug(`[Agent Bridge] Ready for session ${descriptor.sessionId}`);
         } catch (error) {
             agentBridgeServer = undefined;
-            outputChannel.appendLine(`[Agent Bridge] Failed to start: ${String(error)}`);
+            outputChannel.error(`[Agent Bridge] Failed to start: ${String(error)}`);
         }
     }
-    outputChannel.appendLine('[Extension] Maven Test Explorer custom view activated.');
+    outputChannel.debug('[Extension] Maven Test Explorer custom view activated.');
 }
 
 export function deactivate(): void {
+    stopRunProgressIndicators();
     activeCancellationSource?.cancel();
     activeCancellationSource?.dispose();
     activeCancellationSource = undefined;
@@ -297,7 +308,7 @@ async function refresh(context: vscode.ExtensionContext, showMessage: boolean): 
             .map((candidate) => candidate.moduleDir);
         const classes = await scanTestFiles(module.moduleDir, settings.testSourceGlobs, nestedModuleDirs);
         modulesWithClasses.push({ module, classes });
-        outputChannel.appendLine(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
+        outputChannel.debug(`[Discovery] ${module.artifactId}: ${classes.length} test class(es)`);
     }
     inlineTestBridge.buildTree(modulesWithClasses);
     inlineResultFingerprint = '';
@@ -428,7 +439,7 @@ async function refreshEffectiveProfiles(): Promise<void> {
         .filter(({ result }) => result.error)
         .map(({ module, result }) => `${module.artifactId}: ${result.error}`);
     activeProfilesResolving = false;
-    for (const error of activeProfileErrors) outputChannel.appendLine(`[Profiles] ${error}`);
+    for (const error of activeProfileErrors) outputChannel.warn(`[Profiles] ${error}`);
     rebuildTree();
 }
 
@@ -477,7 +488,7 @@ async function runInlineRequest(
     if (requestedIds.length > 0) {
         await runNodes(context, requestedIds, 'testing-api');
     } else {
-        outputChannel.appendLine('[Runner] No Maven tests matched the requested VS Code folder/test scope.');
+        outputChannel.warn('[Runner] No Maven tests matched the requested VS Code folder/test scope.');
     }
 }
 
@@ -762,7 +773,7 @@ async function rerunFailed(context: vscode.ExtensionContext): Promise<void> {
     for (const failedTarget of lastFailedClassTargets.values()) {
         const module = currentModules.find((candidate) => candidate.key === failedTarget.moduleKey);
         if (!module) {
-            outputChannel.appendLine(`[Runner] Failed test module is no longer available: ${failedTarget.moduleKey}`);
+            outputChannel.warn(`[Runner] Failed test module is no longer available: ${failedTarget.moduleKey}`);
             continue;
         }
         const entry = moduleTargets.get(module.moduleDir) ?? { module, classNames: [], runningNodeIds: [] };
@@ -846,12 +857,13 @@ async function runTargets(
         inlineRun.started(item);
     }
 
+    startRunProgressIndicators();
     try {
         for (const target of executionTargets) {
             if (cleanReports) {
                 for (const scopeModule of target.scopeModules) {
                     clearReportDirectories(scopeModule.moduleDir, settings.reportGlobs);
-                    outputChannel.appendLine(`[Runner] Cleared reports in: ${scopeModule.moduleDir}`);
+                    outputChannel.debug(`[Runner] Cleared reports in: ${scopeModule.moduleDir}`);
                 }
             }
 
@@ -899,6 +911,7 @@ async function runTargets(
                         inlineRun,
                         new Map<string, number>(),
                         inlinePublishedResultFingerprints,
+                        false,
                     );
                 },
             );
@@ -918,12 +931,14 @@ async function runTargets(
                         onClassStarted: (className) => {
                             currentRunClasses.add(className);
                             runCoordinator.classStarted(className);
+                            updateRunProgressIndicators();
                             provider?.updateRunSummary(buildWebviewRunSummary());
                         },
                         onClassCompleted: (className) => {
                             currentRunClasses.delete(className);
                             completedRunClasses.add(className);
                             runCoordinator.classCompleted(className);
+                            updateRunProgressIndicators();
                             provider?.updateRunSummary(buildWebviewRunSummary());
                         },
                     },
@@ -997,6 +1012,7 @@ async function runTargets(
                     inlineRun,
                     new Map<string, number>(),
                     inlinePublishedResultFingerprints,
+                    false,
                 );
                 inlineResultFingerprint = inlineResultsFingerprint(Array.from(resultCache.values()));
             }
@@ -1007,6 +1023,11 @@ async function runTargets(
             lastRunCancelled = cancelled;
             const outcome = determineRunOutcome(cancelled, executions);
             lastRunFailed = outcome === 'failed';
+            outputChannel.appendLine(formatRunSummary(
+                outcome,
+                summarizeAgentRun(allResults).stats,
+                lastRunDurationMs ?? 0,
+            ));
             updateCoordinatorResults(allResults);
             runCoordinator.finish(outcome);
             activeHistoryEntryDuringRun = undefined;
@@ -1017,9 +1038,49 @@ async function runTargets(
             runtimeResultByXmlPath = new Map();
             activeCancellationSource?.dispose();
             activeCancellationSource = undefined;
+            stopRunProgressIndicators();
             rebuildTree();
         }
     }
+}
+
+function startRunProgressIndicators(): void {
+    const completion = new Promise<void>((resolve) => {
+        resolveViewProgress = resolve;
+    });
+    void vscode.window.withProgress(
+        {
+            location: { viewId: CUSTOM_VIEW_ID },
+            title: 'Running Maven tests',
+        },
+        async (progress) => {
+            activeViewProgress = progress;
+            updateRunProgressIndicators();
+            await completion;
+            if (activeViewProgress === progress) {
+                activeViewProgress = undefined;
+            }
+        },
+    );
+    updateRunProgressIndicators();
+}
+
+function updateRunProgressIndicators(): void {
+    if (!running || !runStatusBarItem) {
+        return;
+    }
+    const labels = buildRunProgressLabels(completedRunClasses.size, totalRunClasses);
+    runStatusBarItem.text = labels.statusBarText;
+    runStatusBarItem.tooltip = labels.tooltip;
+    runStatusBarItem.show();
+    activeViewProgress?.report({ message: labels.viewMessage });
+}
+
+function stopRunProgressIndicators(): void {
+    runStatusBarItem?.hide();
+    const resolve = resolveViewProgress;
+    resolveViewProgress = undefined;
+    resolve?.();
 }
 
 function stopRun(): void {
@@ -1093,17 +1154,29 @@ function provisionAgentClients(context: vscode.ExtensionContext): { cli: string;
         const packageJson = JSON.parse(fs.readFileSync(path.join(context.extensionUri.fsPath, 'package.json'), 'utf8')) as { version: string };
         const baseDir = path.join(context.globalStorageUri.fsPath, 'agent-bridge');
         const versionDir = path.join(baseDir, packageJson.version);
+        const clientNames = ['cli.js', 'mcp-server.js'];
+        const sources = clientNames.map((name) => path.join(context.extensionUri.fsPath, 'dist', name));
+        if (sources.some((source) => !fs.existsSync(source))) return undefined;
         fs.mkdirSync(versionDir, { recursive: true });
-        for (const name of ['cli.js', 'mcp-server.js']) {
-            const source = path.join(context.extensionUri.fsPath, 'dist', name);
-            if (!fs.existsSync(source)) return undefined;
-            fs.copyFileSync(source, path.join(versionDir, name));
+        for (let index = 0; index < clientNames.length; index += 1) {
+            fs.copyFileSync(sources[index], path.join(versionDir, clientNames[index]));
         }
         fs.writeFileSync(path.join(baseDir, 'current.json'), JSON.stringify({ version: packageJson.version }));
         const cli = path.join(baseDir, 'mteb-cli.cjs');
         const mcp = path.join(baseDir, 'mteb-mcp.cjs');
         writeLauncher(cli, 'cli.js');
         writeLauncher(mcp, 'mcp-server.js');
+        try {
+            const pruned = pruneAgentClientCache(baseDir, packageJson.version);
+            if (pruned.removedVersions.length > 0) {
+                outputChannel.debug(`[Agent Bridge] Removed cached client versions: ${pruned.removedVersions.join(', ')}`);
+            }
+            for (const failure of pruned.failedVersions) {
+                outputChannel.warn(`[Agent Bridge] Could not remove cached client version ${failure.version}: ${String(failure.error)}`);
+            }
+        } catch (error) {
+            outputChannel.warn(`[Agent Bridge] Could not prune cached client versions: ${String(error)}`);
+        }
         return { cli, mcp };
     } catch (error) {
         outputChannel?.appendLine(`[Agent Bridge] Could not provision clients: ${String(error)}`);
@@ -1259,7 +1332,7 @@ async function handleAgentRequest(context: vscode.ExtensionContext, request: Age
                 extraArgs,
                 cleanReports: startRequest.cleanReports,
             }).catch((error: unknown) => {
-                outputChannel.appendLine(`[Agent Bridge] Run failed: ${String(error)}`);
+                outputChannel.error(`[Agent Bridge] Run failed: ${String(error)}`);
             });
             return runCoordinator.getStatus();
         }
@@ -2057,7 +2130,7 @@ function registerJavaAutoRefresh(context: vscode.ExtensionContext): void {
             clearTimeout(refreshDebounce);
         }
         refreshDebounce = setTimeout(() => {
-            outputChannel.appendLine('[Extension] Test file change detected, refreshing custom tree...');
+                outputChannel.debug('[Extension] Test file change detected, refreshing custom tree...');
             void refresh(context, false);
         }, settings.autoRefreshDebounceMs);
     };
@@ -2113,7 +2186,7 @@ function registerMavenProfileWatcher(context: vscode.ExtensionContext): void {
             pendingPomPaths.clear();
             requiresFullRefresh = false;
             if (refreshAll) {
-                outputChannel.appendLine('[Extension] Maven project structure changed, refreshing test discovery...');
+                outputChannel.debug('[Extension] Maven project structure changed, refreshing test discovery...');
                 void refresh(context, false);
                 return;
             }
@@ -2154,12 +2227,12 @@ function refreshMavenProfileMetadata(changedPomPaths: ReadonlySet<string>): void
                 profileSourceLines: descriptor.profileSourceLines,
             };
         } catch (error) {
-            outputChannel.appendLine(`[Extension] Unable to refresh Maven profiles from ${module.pomPath}: ${String(error)}`);
+            outputChannel.warn(`[Extension] Unable to refresh Maven profiles from ${module.pomPath}: ${String(error)}`);
             return module;
         }
     });
     if (changed) {
-        outputChannel.appendLine('[Extension] Maven profiles changed, updating profile picker...');
+        outputChannel.debug('[Extension] Maven profiles changed, updating profile picker...');
         rebuildTree();
         void refreshEffectiveProfiles();
     }
@@ -2194,7 +2267,7 @@ function registerReportWatcher(context: vscode.ExtensionContext): void {
             }
             const changedModuleDirs = new Set(pendingModuleDirs);
             pendingModuleDirs.clear();
-            outputChannel.appendLine(
+            outputChannel.debug(
                 `[Watcher] Report XML changed in ${changedModuleDirs.size} module(s), refreshing only those results...`,
             );
             const reportGlobs = readSettings().reportGlobs;
@@ -2283,13 +2356,13 @@ async function discoverModules(): Promise<MavenModule[]> {
     for (const module of uniqueModules) {
         for (const declaredDir of module.declaredModuleDirs) {
             if (!knownDirs.has(moduleKeyForDir(declaredDir))) {
-                outputChannel.appendLine(
+                outputChannel.warn(
                     `[Discovery] ${module.artifactId}: declared module is outside the discovered workspace: ${declaredDir}`,
                 );
             }
         }
     }
-    outputChannel.appendLine(`[Discovery] Found ${uniqueModules.length} unique Maven module(s)`);
+    outputChannel.debug(`[Discovery] Found ${uniqueModules.length} unique Maven module(s)`);
     return uniqueModules;
 }
 
@@ -2352,7 +2425,7 @@ function readAllReports(moduleDir: string, reportGlobs: readonly string[]): Suit
             }
         }
     }
-    outputChannel.appendLine(`[Runner] Parsed ${results.length} XML report file(s)`);
+    outputChannel.debug(`[Runner] Parsed ${results.length} XML report file(s)`);
     return results;
 }
 
@@ -2410,7 +2483,7 @@ function pruneResultCacheForModules(modules: readonly MavenModule[]): number {
     }
     if (removed > 0) {
         updateFailedClasses(Array.from(resultCache.values()));
-        outputChannel.appendLine(`[Cache] Removed ${removed} result(s) outside the current workspace modules`);
+        outputChannel.debug(`[Cache] Removed ${removed} result(s) outside the current workspace modules`);
     }
     return removed;
 }
@@ -2426,7 +2499,7 @@ function updateFailedClasses(suiteResults: readonly SuiteResult[]): void {
             if (tc.status === 'failed' || tc.status === 'error') {
                 const module = findModuleForResult(suite, tc.className);
                 if (!module) {
-                    outputChannel.appendLine(
+                    outputChannel.warn(
                         `[Results] Cannot assign failed class to a unique module: ${tc.className} (${suite.xmlPath})`,
                     );
                     continue;
@@ -2444,7 +2517,7 @@ async function saveResultCache(context: vscode.ExtensionContext): Promise<void> 
         plain[key] = value;
     }
     await context.workspaceState.update(RESULT_CACHE_KEY, plain);
-    outputChannel.appendLine(`[Cache] Saved ${resultCache.size} result(s) to workspaceState`);
+    outputChannel.debug(`[Cache] Saved ${resultCache.size} result(s) to workspaceState`);
 }
 
 function restoreResultCacheIfNeeded(context: vscode.ExtensionContext): void {
@@ -2458,7 +2531,7 @@ function restoreResultCacheIfNeeded(context: vscode.ExtensionContext): void {
             resultCache.set(resultCacheKey(migrated), migrated);
         }
         updateFailedClasses(Array.from(resultCache.values()));
-        outputChannel.appendLine(`[Cache] Restored ${resultCache.size} result(s) from workspaceState`);
+        outputChannel.debug(`[Cache] Restored ${resultCache.size} result(s) from workspaceState`);
     }
 }
 

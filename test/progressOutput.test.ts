@@ -1,33 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatProgressDateTime, formatTestProgress } from '../src/progressOutput';
+import { formatRunSummary, formatTestProgress } from '../src/progressOutput';
 
-test('formats progress date and time with fixed-width local components', () => {
-    const date = new Date(2026, 11, 30, 10, 1, 1);
-
-    assert.equal(formatProgressDateTime(date), '30/12/2026 - 10:01:01');
-});
-
-test('pads single-digit date and time components', () => {
-    const date = new Date(2026, 0, 2, 3, 4, 5);
-
-    assert.equal(formatProgressDateTime(date), '02/01/2026 - 03:04:05');
-});
-
-test('separates progress metrics and timestamp with vertical bars', () => {
-    const date = new Date(2026, 9, 6, 11, 8, 6);
-
+test('separates progress metrics with vertical bars', () => {
     assert.equal(
-        formatTestProgress(2690, 637, 213, 0, date),
-        '[Test Progress] ✓ 2690 passed │ ✗ 637 failed │ ⊘ 213 skipped │ ⏳ 0 remaining │ 06/10/2026 - 11:08:06',
+        formatTestProgress(2690, 637, 213, 0),
+        '[Test Progress] ✓ 2690 passed │ ✗ 637 failed │ ⊘ 213 skipped │ >> 0 remaining',
     );
 });
 
-test('keeps the timestamp separated when remaining count is unavailable', () => {
-    const date = new Date(2026, 9, 6, 11, 8, 6);
-
+test('omits the remaining segment when its count is unavailable', () => {
     assert.equal(
-        formatTestProgress(2, 1, 0, undefined, date),
-        '[Test Progress] ✓ 2 passed │ ✗ 1 failed │ ⊘ 0 skipped │ 06/10/2026 - 11:08:06',
+        formatTestProgress(2, 1, 0, undefined),
+        '[Test Progress] ✓ 2 passed │ ✗ 1 failed │ ⊘ 0 skipped',
+    );
+});
+
+test('formats a successful final run summary with counters and duration', () => {
+    assert.equal(
+        formatRunSummary('completed', { passed: 471, failed: 0, errors: 0, skipped: 36 }, 9912),
+        '[Run Summary] ✓ PASSED │ Σ 507 total │ ✓ 471 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 36 skipped │ ◷ 9.9s',
+    );
+});
+
+test('formats failed and cancelled final run outcomes', () => {
+    assert.equal(
+        formatRunSummary('failed', { passed: 471, failed: 128, errors: 7, skipped: 36 }, 850),
+        '[Run Summary] ✗ FAILED │ Σ 642 total │ ✓ 471 passed │ ✗ 128 failed │ ⊗ 7 errors │ ⊘ 36 skipped │ ◷ 850ms',
+    );
+    assert.match(
+        formatRunSummary('cancelled', { passed: 1, failed: 0, errors: 0, skipped: 0 }, 1200),
+        /^\[Run Summary\] ■ CANCELLED /,
     );
 });

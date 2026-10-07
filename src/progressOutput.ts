@@ -1,17 +1,5 @@
-/** Formats a local timestamp for Maven progress output as DD/MM/YYYY - HH:mm:ss. */
-export function formatProgressDateTime(date: Date): string {
-    const twoDigits = (value: number): string => String(value).padStart(2, '0');
-
-    return [
-        twoDigits(date.getDate()),
-        twoDigits(date.getMonth() + 1),
-        date.getFullYear(),
-    ].join('/') + ' - ' + [
-        twoDigits(date.getHours()),
-        twoDigits(date.getMinutes()),
-        twoDigits(date.getSeconds()),
-    ].join(':');
-}
+import type { AgentRunStats } from './agentProtocol';
+import type { RunOutcome } from './runPlanning';
 
 /** Formats one scannable Maven progress line with explicit metric separators. */
 export function formatTestProgress(
@@ -19,7 +7,6 @@ export function formatTestProgress(
     failed: number,
     skipped: number,
     remaining: number | undefined,
-    date: Date,
 ): string {
     const parts = [
         `✓ ${passed} passed`,
@@ -27,8 +14,29 @@ export function formatTestProgress(
         `⊘ ${skipped} skipped`,
     ];
     if (remaining !== undefined) {
-        parts.push(`⏳ ${Math.max(0, remaining)} remaining`);
+        parts.push(`>> ${Math.max(0, remaining)} remaining`);
     }
-    parts.push(formatProgressDateTime(date));
     return `[Test Progress] ${parts.join(' │ ')}`;
+}
+
+/** Formats the single authoritative summary emitted when a managed Maven run ends. */
+export function formatRunSummary(
+    outcome: RunOutcome,
+    stats: AgentRunStats,
+    durationMs: number,
+): string {
+    const label = outcome === 'completed' ? 'PASSED' : outcome.toUpperCase();
+    const outcomeIcon = outcome === 'completed' ? '✓' : outcome === 'failed' ? '✗' : '■';
+    const total = stats.passed + stats.failed + stats.errors + stats.skipped;
+    return `[Run Summary] ${outcomeIcon} ${label} │ Σ ${total} total │ ✓ ${stats.passed} passed │ `
+        + `✗ ${stats.failed} failed │ ⊗ ${stats.errors} errors │ ⊘ ${stats.skipped} skipped │ `
+        + `◷ ${formatRunDuration(durationMs)}`;
+}
+
+function formatRunDuration(durationMs: number): string {
+    const boundedDuration = Math.max(0, durationMs);
+    if (boundedDuration < 1000) {
+        return `${Math.round(boundedDuration)}ms`;
+    }
+    return `${(boundedDuration / 1000).toFixed(1)}s`;
 }

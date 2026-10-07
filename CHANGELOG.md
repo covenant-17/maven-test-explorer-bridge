@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.3] - 2026-10-07
+
+### Added
+
+- Added Maven run progress indicators to the explorer view title and VS Code status bar, including completed and total test-class counts.
+- Added theme-aware highlighting for progress and final-summary icons in the Maven Test Explorer log output.
+
+### Changed
+
+- Converted the Maven output channel to structured VS Code logging, keeping routine watcher, cache, discovery, and XML details at Debug level while surfacing warnings and errors appropriately.
+- Added a single compact final run summary and removed redundant intermediate result summaries during managed runs.
+- Agent Bridge client provisioning now retains only the current and most recently used previous extracted client versions.
+
 ## [1.1.2] - 2026-10-07
 
 ### Added

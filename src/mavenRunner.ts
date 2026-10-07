@@ -106,7 +106,6 @@ export function runMaven(
                         runningFailed,
                         runningSkipped,
                         remaining,
-                        new Date(),
                     ));
                     progressHandlers?.onClassCompleted?.(m[5]);
                 }

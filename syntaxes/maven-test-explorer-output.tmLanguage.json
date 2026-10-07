@@ -1,0 +1,115 @@
+{
+  "scopeName": "maven-test-explorer.output.injection",
+  "injectionSelector": "L:text.log",
+  "patterns": [
+    {
+      "match": "(\\[Run Summary\\])\\s+(✓)\\s+(PASSED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "captures": {
+        "2": { "name": "markup.inserted.maven-test-explorer" },
+        "4": { "name": "comment.maven-test-explorer" },
+        "5": { "name": "constant.numeric.maven-test-explorer" },
+        "7": { "name": "comment.maven-test-explorer" },
+        "8": { "name": "markup.inserted.maven-test-explorer" },
+        "10": { "name": "comment.maven-test-explorer" },
+        "11": { "name": "token.error-token" },
+        "13": { "name": "comment.maven-test-explorer" },
+        "14": { "name": "token.error-token" },
+        "16": { "name": "comment.maven-test-explorer" },
+        "17": { "name": "comment.maven-test-explorer" },
+        "19": { "name": "comment.maven-test-explorer" },
+        "20": { "name": "constant.numeric.maven-test-explorer" }
+      }
+    },
+    {
+      "match": "(\\[Run Summary\\])\\s+(✗)\\s+(FAILED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "captures": {
+        "2": { "name": "token.error-token" },
+        "4": { "name": "comment.maven-test-explorer" },
+        "5": { "name": "constant.numeric.maven-test-explorer" },
+        "7": { "name": "comment.maven-test-explorer" },
+        "8": { "name": "markup.inserted.maven-test-explorer" },
+        "10": { "name": "comment.maven-test-explorer" },
+        "11": { "name": "token.error-token" },
+        "13": { "name": "comment.maven-test-explorer" },
+        "14": { "name": "token.error-token" },
+        "16": { "name": "comment.maven-test-explorer" },
+        "17": { "name": "comment.maven-test-explorer" },
+        "19": { "name": "comment.maven-test-explorer" },
+        "20": { "name": "constant.numeric.maven-test-explorer" }
+      }
+    },
+    {
+      "match": "(\\[Run Summary\\])\\s+(■)\\s+(CANCELLED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "captures": {
+        "2": { "name": "token.warn-token" },
+        "4": { "name": "comment.maven-test-explorer" },
+        "5": { "name": "constant.numeric.maven-test-explorer" },
+        "7": { "name": "comment.maven-test-explorer" },
+        "8": { "name": "markup.inserted.maven-test-explorer" },
+        "10": { "name": "comment.maven-test-explorer" },
+        "11": { "name": "token.error-token" },
+        "13": { "name": "comment.maven-test-explorer" },
+        "14": { "name": "token.error-token" },
+        "16": { "name": "comment.maven-test-explorer" },
+        "17": { "name": "comment.maven-test-explorer" },
+        "19": { "name": "comment.maven-test-explorer" },
+        "20": { "name": "constant.numeric.maven-test-explorer" }
+      }
+    },
+    {
+      "match": "(\\[Test Progress\\])\\s+(✓)\\s+(\\d+)(\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+)(\\s+failed)\\s+(│)\\s+(⊘)\\s+(\\d+)(\\s+skipped)(?:\\s+(│)\\s+(>>)\\s+(\\d+)(\\s+remaining))?$",
+      "captures": {
+        "1": { "name": "markup.heading.maven-test-explorer" },
+        "2": { "name": "markup.inserted log.info" },
+        "3": { "name": "constant.numeric.maven-test-explorer" },
+        "5": { "name": "comment.maven-test-explorer" },
+        "6": { "name": "token.error-token" },
+        "7": { "name": "constant.numeric.maven-test-explorer" },
+        "9": { "name": "comment.maven-test-explorer" },
+        "11": { "name": "constant.numeric.maven-test-explorer" },
+        "13": { "name": "comment.maven-test-explorer" },
+        "14": { "name": "token.warn-token" },
+        "15": { "name": "constant.numeric.maven-test-explorer" }
+      }
+    },
+    {
+      "match": "\\[ERROR\\].*$|\\bBUILD FAILURE\\b.*$",
+      "name": "markup.deleted.maven-test-explorer"
+    },
+    {
+      "match": "\\[Maven\\] (?:Process error:.*|Exited with code (?!0\\b).*)$|\\[Results\\] NO (?:MODULE|ITEM):.*$|\\[(?:Runner|Profiles|Agent Bridge)\\].*(?:Failed|Cannot|Unable).*$",
+      "name": "markup.deleted.maven-test-explorer"
+    },
+    {
+      "match": "\\bBUILD SUCCESS\\b.*$",
+      "name": "markup.inserted.maven-test-explorer"
+    },
+    {
+      "match": "\\[Maven\\] Run cancelled by user\\.$",
+      "name": "markup.changed.maven-test-explorer"
+    },
+    {
+      "match": "\\[(WARNING|WARN)\\].*$",
+      "name": "markup.changed.maven-test-explorer"
+    },
+    {
+      "match": "(\\[Results\\])\\s+(\\d+\\s+tests)\\s+—\\s+(\\d+\\s+passed),\\s+(\\d+\\s+failed),\\s+(\\d+\\s+errors),\\s+(\\d+\\s+skipped)$",
+      "captures": {
+        "1": { "name": "entity.name.section.maven-test-explorer" },
+        "2": { "name": "constant.numeric.maven-test-explorer" },
+        "3": { "name": "markup.inserted.maven-test-explorer" },
+        "4": { "name": "markup.deleted.maven-test-explorer" },
+        "5": { "name": "markup.deleted.maven-test-explorer" },
+        "6": { "name": "markup.changed.maven-test-explorer" }
+      }
+    },
+    {
+      "match": "\\[(Runner|Maven|Results|Test Progress|Run Summary)\\]",
+      "name": "entity.name.section.maven-test-explorer"
+    },
+    {
+      "match": "\\[(Watcher|Cache|Discovery|Extension|Profiles|Agent Bridge)\\]",
+      "name": "comment.maven-test-explorer"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ export function publishResults(
     existingRun?: vscode.TestRun,
     sharedInvocationCounts?: Map<string, number>,
     publishedResultFingerprints?: Map<string, string>,
+    logSummary = true,
 ): Set<string> {
     const resolvedItemIds = new Set<string>();
     const ownRun = existingRun === undefined;
@@ -82,10 +83,12 @@ export function publishResults(
     }
 
     const total = totalPassed + totalFailed + totalError + totalSkipped;
-    outputChannel.appendLine(
-        `[Results] ${total} tests — ` +
-        `${totalPassed} passed, ${totalFailed} failed, ${totalError} errors, ${totalSkipped} skipped`,
-    );
+    if (logSummary) {
+        outputChannel.appendLine(
+            `[Results] ${total} tests — ` +
+            `${totalPassed} passed, ${totalFailed} failed, ${totalError} errors, ${totalSkipped} skipped`,
+        );
+    }
 
     return resolvedItemIds;
 }

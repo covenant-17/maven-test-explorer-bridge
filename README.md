@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.2-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.3-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -22,7 +22,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
 - **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
 - **Interactive Maven profiles** — select one or more color-coded profiles beside the search field; the extension also resolves the profiles Maven actually activates.
-- **Live runtime feedback** — show running classes, partial XML results, elapsed time, and aggregate progress while Maven is active.
+- **Live runtime feedback** — show running classes, partial XML results, elapsed time, view-title progress, status-bar progress, and aggregate counters while Maven is active.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
 - **Run History** — store and restore completed, failed, or cancelled result sets per workspace, or switch back to the pinned current run while Maven is active.
 - **Re-run Failed** — rerun failed or errored classes in the exact Maven module that produced each report.
@@ -231,6 +231,7 @@ The custom webview is the primary explorer UI. The native VS Code Testing API is
 - **No Maven modules:** confirm that the open workspace contains `pom.xml` and that it is not under `target/`.
 - **No discovered tests:** check `mavenTestExplorer.testSourceGlobs`; discovery reads Java sources and does not use compiled test metadata.
 - **Maven does not start:** check the Maven Test Explorer output channel, wrapper location, and `mavenTestExplorer.mavenExecutable`.
+- **More diagnostic output is needed:** run **Developer: Set Log Level...**, select **Maven Test Explorer**, and choose **Debug** to include report-watcher, cache, discovery, and XML parsing details.
 - **No or stale results:** verify `mavenTestExplorer.reportGlobs`, `watchReports`, and the actual Surefire/Failsafe output paths. Use **Maven: Clean Test Reports** when necessary.
 - **A custom selector fails:** adapt `mavenTestExplorer.testClassCommandTemplate` to the test plugin's selector syntax.
 - **A row is missing after filtering:** clear the filter with `Escape` or the filter clear button, then refresh discovery.
