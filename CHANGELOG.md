@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.8] - 2026-10-08
+
+### Fixed
+
+- Maven timestamp prefixes no longer appear as per-second categories in the VS Code Output filter; Maven severity categories such as `INFO` and `ERROR` remain available.
+
 ## [1.1.7] - 2026-10-08
 
 ### Changed

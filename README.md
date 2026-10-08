@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.7-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.8-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -22,7 +22,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 - **Responsive large suites** — virtualized rows keep large projects responsive while names and metadata yield space to result statistics.
 - **Run from the UI** — run all reactors or a non-recursive project, package, class, method, or grouped multi-selection through Maven.
 - **Interactive Maven profiles** — select one or more color-coded profiles beside the search field, with a compact count badge for multiple selections; the extension also resolves the profiles Maven actually activates.
-- **Live runtime feedback** — show running classes, partial XML results, elapsed time, view-title progress, status-bar progress, and aggregate counters while Maven is active.
+- **Live runtime feedback** — show running classes, partial XML results, elapsed time, view-title progress, status-bar progress, and aggregate counters while Maven is active, with stable output categories that do not treat Maven timestamps as filters.
 - **Stop Current Run** — terminate the active Maven process tree and retain partial results as a cancelled history entry.
 - **Run History** — store and restore completed, failed, or cancelled result sets per workspace, or switch back to the pinned current run while Maven is active.
 - **Re-run Failed** — rerun failed or errored classes in the exact Maven module that produced each report.

@@ -7,6 +7,7 @@ import { ExtensionSettings } from './settings';
 import { SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR } from './constants';
 import { ensureNonRecursiveArgs } from './runPlanning';
 import { formatTestProgress } from './progressOutput';
+import { categorizeMavenOutput } from './mavenOutput';
 
 export interface MavenRunResult {
     readonly exitCode: number;
@@ -74,7 +75,7 @@ export function runMaven(
 
         proc.stdout?.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
-            outputChannel.append(text);
+            outputChannel.append(categorizeMavenOutput(text));
             progressHandlers?.onOutput?.(text);
 
             stdoutBuf += text;
@@ -114,7 +115,7 @@ export function runMaven(
 
         proc.stderr?.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
-            outputChannel.append(text);
+            outputChannel.append(categorizeMavenOutput(text));
             progressHandlers?.onOutput?.(text);
         });
 
