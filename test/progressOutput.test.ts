@@ -19,17 +19,17 @@ test('omits the remaining segment when its count is unavailable', () => {
 test('formats a successful final run summary with counters and duration', () => {
     assert.equal(
         formatRunSummary('completed', { passed: 471, failed: 0, errors: 0, skipped: 36 }, 9912),
-        '[Run Summary] ✓ PASSED │ Σ 507 total │ ✓ 471 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 36 skipped │ ◷ 9.9s',
+        '[Test Progress · Summary] ✓ PASSED │ Σ 507 total │ ✓ 471 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 36 skipped │ ◷ 9.9s',
     );
 });
 
 test('formats failed and cancelled final run outcomes', () => {
     assert.equal(
         formatRunSummary('failed', { passed: 471, failed: 128, errors: 7, skipped: 36 }, 850),
-        '[Run Summary] ✗ FAILED │ Σ 642 total │ ✓ 471 passed │ ✗ 128 failed │ ⊗ 7 errors │ ⊘ 36 skipped │ ◷ 850ms',
+        '[Test Progress · Summary] ✗ FAILED │ Σ 642 total │ ✓ 471 passed │ ✗ 128 failed │ ⊗ 7 errors │ ⊘ 36 skipped │ ◷ 850ms',
     );
     assert.match(
         formatRunSummary('cancelled', { passed: 1, failed: 0, errors: 0, skipped: 0 }, 1200),
-        /^\[Run Summary\] ■ CANCELLED /,
+        /^\[Test Progress · Summary\] ■ CANCELLED /,
     );
 });

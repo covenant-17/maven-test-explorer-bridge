@@ -3,7 +3,7 @@
   "injectionSelector": "L:text.log",
   "patterns": [
     {
-      "match": "(\\[Run Summary\\])\\s+(✓)\\s+(PASSED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "match": "(\\[Test Progress · Summary\\])\\s+(✓)\\s+(PASSED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
       "captures": {
         "2": { "name": "markup.inserted.maven-test-explorer" },
         "4": { "name": "comment.maven-test-explorer" },
@@ -21,7 +21,7 @@
       }
     },
     {
-      "match": "(\\[Run Summary\\])\\s+(✗)\\s+(FAILED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "match": "(\\[Test Progress · Summary\\])\\s+(✗)\\s+(FAILED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
       "captures": {
         "2": { "name": "token.error-token" },
         "4": { "name": "comment.maven-test-explorer" },
@@ -39,7 +39,7 @@
       }
     },
     {
-      "match": "(\\[Run Summary\\])\\s+(■)\\s+(CANCELLED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
+      "match": "(\\[Test Progress · Summary\\])\\s+(■)\\s+(CANCELLED)\\s+(│)\\s+(Σ)\\s+(\\d+\\s+total)\\s+(│)\\s+(✓)\\s+(\\d+\\s+passed)\\s+(│)\\s+(✗)\\s+(\\d+\\s+failed)\\s+(│)\\s+(⊗)\\s+(\\d+\\s+errors)\\s+(│)\\s+(⊘)\\s+(\\d+\\s+skipped)\\s+(│)\\s+(◷)\\s+([0-9.]+(?:ms|s))$",
       "captures": {
         "2": { "name": "token.warn-token" },
         "4": { "name": "comment.maven-test-explorer" },
@@ -104,7 +104,7 @@
       }
     },
     {
-      "match": "\\[(Runner|Maven|Results|Test Progress|Run Summary)\\]",
+      "match": "\\[(Runner|Maven|Results|Test Progress|Test Progress · Summary)\\]",
       "name": "entity.name.section.maven-test-explorer"
     },
     {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.7] - 2026-10-08
+
+### Changed
+
+- Final test totals now use the `[Test Progress · Summary]` label while live counters retain `[Test Progress]`, making the completed result easier to distinguish in the output log.
+
 ## [1.1.6] - 2026-10-07
 
 ### Changed

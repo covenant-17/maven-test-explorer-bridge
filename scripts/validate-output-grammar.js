@@ -28,13 +28,13 @@ function matchingScopes(line) {
 }
 
 const passedSummary = patterns.find((pattern) => new RegExp(pattern.match, 'u').test(
-    '2026-10-07 11:15:14.101 [info] [Run Summary] ✓ PASSED │ Σ 3 total │ ✓ 3 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
+    '2026-10-07 11:15:14.101 [info] [Test Progress · Summary] ✓ PASSED │ Σ 3 total │ ✓ 3 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
 ));
 assert.equal(passedSummary?.captures?.['2']?.name, 'markup.inserted.maven-test-explorer');
 assert.equal(passedSummary?.captures?.['8']?.name, 'markup.inserted.maven-test-explorer');
 
 const failedSummary = patterns.find((pattern) => new RegExp(pattern.match, 'u').test(
-    '2026-10-07 11:15:14.101 [info] [Run Summary] ✗ FAILED │ Σ 3 total │ ✓ 2 passed │ ✗ 1 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
+    '2026-10-07 11:15:14.101 [info] [Test Progress · Summary] ✗ FAILED │ Σ 3 total │ ✓ 2 passed │ ✗ 1 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
 ));
 assert.equal(failedSummary?.captures?.['2']?.name, 'token.error-token');
 assert.equal(failedSummary?.captures?.['8']?.name, 'markup.inserted.maven-test-explorer');
@@ -43,7 +43,9 @@ assert.equal(failedSummary?.captures?.['14']?.name, 'token.error-token');
 assert.ok(matchingScopes('2026-10-07 11:15:14.101 [info] [ERROR] Maven compilation failed')
     .includes('markup.deleted.maven-test-explorer'));
 
-const progressPattern = patterns.find((pattern) => pattern.match.includes('Test Progress') && pattern.captures);
+const progressPattern = patterns.find((pattern) => pattern.match.includes('Test Progress')
+    && pattern.match.includes('remaining')
+    && pattern.captures);
 assert.ok(progressPattern, 'Detailed Test Progress grammar rule is missing.');
 const progressMatch = new RegExp(progressPattern.match, 'u').exec(
     '2026-10-07 11:15:14.101 [info] [Test Progress] ✓ 471 passed │ ✗ 128 failed │ ⊘ 36 skipped │ >> 2904 remaining',

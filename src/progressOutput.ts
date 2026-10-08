@@ -28,7 +28,7 @@ export function formatRunSummary(
     const label = outcome === 'completed' ? 'PASSED' : outcome.toUpperCase();
     const outcomeIcon = outcome === 'completed' ? '✓' : outcome === 'failed' ? '✗' : '■';
     const total = stats.passed + stats.failed + stats.errors + stats.skipped;
-    return `[Run Summary] ${outcomeIcon} ${label} │ Σ ${total} total │ ✓ ${stats.passed} passed │ `
+    return `[Test Progress · Summary] ${outcomeIcon} ${label} │ Σ ${total} total │ ✓ ${stats.passed} passed │ `
         + `✗ ${stats.failed} failed │ ⊗ ${stats.errors} errors │ ⊘ ${stats.skipped} skipped │ `
         + `◷ ${formatRunDuration(durationMs)}`;
 }
