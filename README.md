@@ -6,7 +6,7 @@
 
 > Run Java tests with Maven and inspect Surefire/Failsafe results in a dedicated VS Code Testing-sidebar view — no Microsoft Java Test Runner required.
 
-[![Version](https://img.shields.io/badge/version-1.1.8-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.9-brightgreen)](CHANGELOG.md)
 [![VS Code Engine](https://img.shields.io/badge/vscode-%5E1.84.0-blue)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-Install-blue)](https://marketplace.visualstudio.com/items?itemName=covenant-17.maven-test-explorer-bridge)
@@ -54,7 +54,7 @@ Maven Test Explorer Bridge discovers JUnit 5 tests from Java sources, starts Mav
 
 By default the extension prefers the Maven Wrapper and falls back to `mvn`. Change the executable, goals, profiles, arguments, source globs, or report globs when the project uses a different layout.
 
-Use the profile button to the right of the search field to activate any number of discovered Maven profiles for subsequent runs. The tooltip distinguishes the persistent selection from profiles Maven currently activates through the POM, `settings.xml`, properties, JDK, and other activation rules; effective state is resolved with `help:active-profiles`. Saved POM changes refresh profile metadata and effective state after a short debounce without rescanning Java tests. Profile colors are assigned deterministically from VS Code theme colors. Hover a profile to read `<mavenTestExplorer.profileDescription>` from that profile's `<properties>` in `pom.xml`; profiles without one show the supported markup. The source button pinned to a declared profile opens its `<profile>` line in the owning POM. A direct custom `<description>` is also read for compatibility, although Maven itself rejects that non-standard profile element.
+Use the profile button to the right of the search field to activate any number of discovered Maven profiles for subsequent runs. When no profiles are found in workspace POM files, the menu explains how to add one. The tooltip distinguishes the persistent selection from profiles Maven currently activates through the POM, `settings.xml`, properties, JDK, and other activation rules; effective state is resolved with `help:active-profiles`. Saved POM changes refresh profile metadata and effective state after a short debounce without rescanning Java tests. Profile colors are assigned deterministically from VS Code theme colors. Hover a profile to read `<mavenTestExplorer.profileDescription>` from that profile's `<properties>` in `pom.xml`; profiles without one show the supported markup. The source button pinned to a declared profile opens its `<profile>` line in the owning POM. A direct custom `<description>` is also read for compatibility, although Maven itself rejects that non-standard profile element.
 
 ## Using the Explorer
 

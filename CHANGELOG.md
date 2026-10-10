@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.9] - 2026-10-10
+
+### Fixed
+
+- The Maven profile picker now explains when no profiles are found in workspace POM files.
+
 ## [1.1.8] - 2026-10-08
 
 ### Fixed

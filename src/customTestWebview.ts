@@ -382,6 +382,14 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         .profile-menu[hidden] {
             display: none;
         }
+        .profile-empty {
+            padding: 8px;
+            color: var(--vscode-descriptionForeground);
+            line-height: 1.4;
+        }
+        .profile-empty-title {
+            color: var(--vscode-menu-foreground);
+        }
         .profile-option {
             width: 100%;
             height: 28px;
@@ -1592,6 +1600,7 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
 
         function renderProfileButton() {
             const activeProfiles = state.activeProfiles || [];
+            const availableProfiles = state.availableProfiles || [];
             const active = activeProfiles.length > 0;
             const multiple = activeProfiles.length > 1;
             profileButtonEl.dataset.active = active ? 'true' : 'false';
@@ -1604,7 +1613,9 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
                 profileButtonEl.style.removeProperty('--profile-accent');
             }
             const label = activeProfiles.length === 0
-                ? 'Select Maven profiles; no profiles selected'
+                ? availableProfiles.length === 0
+                    ? 'Maven profiles; no profiles found in workspace pom.xml files'
+                    : 'Select Maven profiles; no profiles selected'
                 : activeProfiles.length === 1
                     ? 'Select Maven profiles; selected: ' + activeProfiles[0]
                     : 'Select Maven profiles; selected: ' + activeProfiles.join(', ');
@@ -1658,6 +1669,19 @@ export class CustomTestWebviewProvider implements vscode.WebviewViewProvider {
         function renderProfileMenu() {
             profileMenuEl.textContent = '';
             profileMenuItems = [];
+            if (!(state.availableProfiles || []).length) {
+                const empty = document.createElement('div');
+                empty.className = 'profile-empty';
+                empty.setAttribute('role', 'option');
+                empty.setAttribute('aria-disabled', 'true');
+                empty.append(
+                    textSpan('No Maven profiles found', 'profile-empty-title'),
+                    document.createElement('br'),
+                    textSpan('Add a profile to a workspace pom.xml to select it here.'),
+                );
+                profileMenuEl.appendChild(empty);
+                return;
+            }
             const activeProfiles = new Set(state.activeProfiles || []);
             for (const profile of state.availableProfiles || []) {
                 profileMenuEl.appendChild(profileOption(profile, profile, activeProfiles.has(profile)));
