@@ -7,7 +7,7 @@ import { ExtensionSettings } from './settings';
 import { SUREFIRE_REPORTS_DIR, FAILSAFE_REPORTS_DIR } from './constants';
 import { ensureNonRecursiveArgs } from './runPlanning';
 import { formatTestProgress } from './progressOutput';
-import { categorizeMavenOutput } from './mavenOutput';
+import { categorizeMavenOutput, MavenOutputStream } from './mavenOutput';
 
 export interface MavenRunResult {
     readonly exitCode: number;
@@ -61,7 +61,6 @@ export function runMaven(
         let runningPassed = 0;
         let runningFailed = 0;
         let runningSkipped = 0;
-        let stdoutBuf = '';
         let cancellationRequested = false;
         let settled = false;
 
@@ -73,49 +72,51 @@ export function runMaven(
             resolve(result);
         };
 
-        proc.stdout?.on('data', (chunk: Buffer) => {
-            const text = chunk.toString();
-            outputChannel.append(categorizeMavenOutput(text));
-            progressHandlers?.onOutput?.(text);
+        const stdout = new MavenOutputStream((line) => {
+            // LogOutputChannel filters whole entries, so never log a pipe chunk
+            // containing several lines (or a partial line) as one entry.
+            outputChannel.appendLine(categorizeMavenOutput(line));
+            const progressLine = line.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').trim();
+            const started = SUREFIRE_CLASS_START.exec(progressLine);
+            if (started) {
+                progressHandlers?.onClassStarted?.(started[1]);
+            }
 
-            stdoutBuf += text;
-            let newlineIdx: number;
-            while ((newlineIdx = stdoutBuf.indexOf('\n')) !== -1) {
-                const line = stdoutBuf.slice(0, newlineIdx);
-                stdoutBuf = stdoutBuf.slice(newlineIdx + 1);
-
-                const progressLine = line.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').trim();
-                const started = SUREFIRE_CLASS_START.exec(progressLine);
-                if (started) {
-                    progressHandlers?.onClassStarted?.(started[1]);
-                }
-
-                const m = SUREFIRE_CLASS_SUMMARY.exec(progressLine);
-                if (m) {
-                    const classTotal    = parseInt(m[1], 10);
-                    const classFailed   = parseInt(m[2], 10);
-                    const classErrors   = parseInt(m[3], 10);
-                    const classSkipped  = parseInt(m[4], 10);
-                    const classPassed   = classTotal - classFailed - classErrors - classSkipped;
-                    runningPassed  += classPassed;
-                    runningFailed  += classFailed + classErrors;
-                    runningSkipped += classSkipped;
-                    const done = runningPassed + runningFailed + runningSkipped;
-                    const remaining = totalExpected !== undefined ? totalExpected - done : undefined;
-                    outputChannel.appendLine(formatTestProgress(
-                        runningPassed,
-                        runningFailed,
-                        runningSkipped,
-                        remaining,
-                    ));
-                    progressHandlers?.onClassCompleted?.(m[5]);
-                }
+            const m = SUREFIRE_CLASS_SUMMARY.exec(progressLine);
+            if (m) {
+                const classTotal    = parseInt(m[1], 10);
+                const classFailed   = parseInt(m[2], 10);
+                const classErrors   = parseInt(m[3], 10);
+                const classSkipped  = parseInt(m[4], 10);
+                const classPassed   = classTotal - classFailed - classErrors - classSkipped;
+                runningPassed  += classPassed;
+                runningFailed  += classFailed + classErrors;
+                runningSkipped += classSkipped;
+                const done = runningPassed + runningFailed + runningSkipped;
+                const remaining = totalExpected !== undefined ? totalExpected - done : undefined;
+                outputChannel.appendLine(formatTestProgress(
+                    runningPassed,
+                    runningFailed,
+                    runningSkipped,
+                    remaining,
+                ));
+                progressHandlers?.onClassCompleted?.(m[5]);
             }
         });
 
-        proc.stderr?.on('data', (chunk: Buffer) => {
-            const text = chunk.toString();
-            outputChannel.append(categorizeMavenOutput(text));
+        const stderr = new MavenOutputStream((line) => {
+            outputChannel.appendLine(categorizeMavenOutput(line));
+        });
+
+        // Decode UTF-8 across pipe chunks before framing lines.
+        proc.stdout?.setEncoding('utf8');
+        proc.stderr?.setEncoding('utf8');
+        proc.stdout?.on('data', (text: string) => {
+            stdout.write(text);
+            progressHandlers?.onOutput?.(text);
+        });
+        proc.stderr?.on('data', (text: string) => {
+            stderr.write(text);
             progressHandlers?.onOutput?.(text);
         });
 
@@ -130,6 +131,8 @@ export function runMaven(
 
         proc.on('close', (code) => {
             cancellationSubscription.dispose();
+            stdout.flush();
+            stderr.flush();
             const exitCode = code ?? -1;
             outputChannel.appendLine('');
             outputChannel.appendLine(`[Maven] Exited with code ${exitCode}`);

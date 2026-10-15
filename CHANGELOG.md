@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.10] - 2026-10-15
+
+### Fixed
+
+- Maven output now keeps each line in a separate log entry so verbose stdout/stderr cannot group unrelated logs with test progress when filtering.
+- Timestamp category normalization now applies to every output line, including colored logs and lines split across process chunks, preventing per-second entries in the Output filter menu.
+- UTF-8 characters split across process chunks and final lines without a newline are now preserved.
+
 ## [1.1.9] - 2026-10-10
 
 ### Fixed
