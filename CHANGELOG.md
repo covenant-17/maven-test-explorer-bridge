@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.11] - 2026-10-16
+
+### Fixed
+
+- Maven output now uses native text filtering instead of the structured-log entry index, avoiding stale filters when verbose test logs rotate. Timestamps, severity levels, and progress labels remain visible and searchable as text.
+- Routine diagnostic output follows the default VS Code log level; choose Debug through Developer: Set Log Level to include it.
+
+### Known limitations
+
+- Reopening an extremely large output channel can still hit VS Code's native filter limits. This release works around stale filtering during live output; it does not replace the native output viewer.
+
 ## [1.1.10] - 2026-10-15
 
 ### Fixed

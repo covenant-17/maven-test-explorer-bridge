@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { MavenOutputChannel } from './outputChannel';
 import { findMavenModules, MavenModule } from './mavenProjectDetector';
 import {
     buildReactorGroups,
@@ -132,7 +133,7 @@ interface FailedClassTarget {
     readonly fqcn: string;
 }
 
-let outputChannel: vscode.LogOutputChannel;
+let outputChannel: MavenOutputChannel;
 let currentModules: MavenModule[] = [];
 let modulesWithClasses: ModuleClasses[] = [];
 let currentTree: CustomTreeSnapshot = emptyTree();
@@ -187,7 +188,10 @@ let inlineTestBridge: InlineTestBridge;
 let inlineResultFingerprint = '';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
+    outputChannel = new MavenOutputChannel(
+        vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, 'log'),
+        () => vscode.env.logLevel,
+    );
     runStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     runStatusBarItem.name = 'Maven Test Explorer Run';
     runStatusBarItem.command = `${CUSTOM_VIEW_ID}.focus`;
