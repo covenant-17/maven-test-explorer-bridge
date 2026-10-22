@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.12] - 2026-10-22
+
+### Fixed
+
+- Live test progress and final summaries now remain visible as new Maven output arrives with an active text filter.
+- Final summaries now highlight headings, counters, durations, and status icons consistently with live progress while keeping metric labels in the default text style.
+
 ## [1.1.11] - 2026-10-16
 
 ### Fixed

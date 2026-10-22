@@ -30,16 +30,16 @@ function matchingScopes(line) {
 const passedSummary = patterns.find((pattern) => new RegExp(pattern.match, 'u').test(
     '2026-10-07 11:15:14.101 [info] [Test Progress · Summary] ✓ PASSED │ Σ 3 total │ ✓ 3 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
 ));
-assert.equal(passedSummary?.captures?.['2']?.name, 'markup.inserted.maven-test-explorer');
-assert.equal(passedSummary?.captures?.['8']?.name, 'markup.inserted.maven-test-explorer');
+assert.equal(passedSummary?.captures?.['2']?.name, 'markup.inserted log.info');
+assert.equal(passedSummary?.captures?.['9']?.name, 'markup.inserted log.info');
 
 const failedSummary = patterns.find((pattern) => new RegExp(pattern.match, 'u').test(
     '2026-10-07 11:15:14.101 [info] [Test Progress · Summary] ✗ FAILED │ Σ 3 total │ ✓ 2 passed │ ✗ 1 failed │ ⊗ 0 errors │ ⊘ 0 skipped │ ◷ 1.2s',
 ));
 assert.equal(failedSummary?.captures?.['2']?.name, 'token.error-token');
-assert.equal(failedSummary?.captures?.['8']?.name, 'markup.inserted.maven-test-explorer');
-assert.equal(failedSummary?.captures?.['11']?.name, 'token.error-token');
-assert.equal(failedSummary?.captures?.['14']?.name, 'token.error-token');
+assert.equal(failedSummary?.captures?.['9']?.name, 'markup.inserted log.info');
+assert.equal(failedSummary?.captures?.['13']?.name, 'token.error-token');
+assert.equal(failedSummary?.captures?.['17']?.name, 'token.error-token');
 assert.ok(matchingScopes('2026-10-07 11:15:14.101 [info] [ERROR] Maven compilation failed')
     .includes('markup.deleted.maven-test-explorer'));
 
@@ -58,5 +58,30 @@ assert.equal(progressMatch[14], '>>');
 assert.equal(progressMatch[15], '2904');
 assert.equal(progressPattern.captures['6'].name, 'token.error-token');
 assert.equal(progressPattern.captures['14'].name, 'token.warn-token');
+
+// Use the actual severity-first framing and the user's exact counters. Checking
+// only whether a regex matches missed unstyled headings and numeric captures.
+for (const [icon, outcome, iconScope] of [
+    ['✓', 'PASSED', progressPattern.captures['2'].name],
+    ['✗', 'FAILED', 'token.error-token'],
+    ['■', 'CANCELLED', 'token.warn-token'],
+]) {
+    for (const duration of ['1544.8s', '500ms']) {
+        const line = `[info] 2026-10-22 09:05:39.645 [Test Progress · Summary] ${icon} ${outcome} │ Σ 715 total │ ✓ 683 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 32 skipped │ ◷ ${duration}`;
+        const pattern = patterns.find((candidate) => new RegExp(candidate.match, 'u').test(line));
+        assert.ok(pattern?.captures, `${outcome} summary needs a detailed styling rule.`);
+        const match = new RegExp(pattern.match, 'u').exec(line);
+        assert.equal(pattern.captures['1']?.name, progressPattern.captures['1'].name);
+        assert.equal(pattern.captures['2']?.name, iconScope);
+        assert.equal(pattern.captures['9']?.name, progressPattern.captures['2'].name);
+        for (const [group, value] of [[6, '715'], [10, '683'], [14, '0'], [18, '0'], [22, '32'], [26, duration]]) {
+            assert.equal(match[group], value);
+            assert.equal(pattern.captures[group]?.name, progressPattern.captures['3'].name);
+        }
+        for (const group of [7, 11, 15, 19, 23]) {
+            assert.equal(pattern.captures[group], undefined, 'Metric labels should keep the default text style.');
+        }
+    }
+}
 
 console.log('[validate-output-grammar] Contribution, regular expressions, and representative log lines are valid.');

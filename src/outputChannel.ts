@@ -8,6 +8,8 @@ const LEVELS: Record<MessageLevel, number> = { trace: 1, debug: 2, info: 3, warn
  * without the separate log-entry index that can drift during log rotation.
  */
 export class MavenOutputChannel implements vscode.OutputChannel {
+    private hasContent = false;
+
     constructor(
         private readonly channel: vscode.OutputChannel,
         private readonly getLogLevel: () => vscode.LogLevel,
@@ -24,8 +26,14 @@ export class MavenOutputChannel implements vscode.OutputChannel {
     warn(value: string): void { this.write('warning', value); }
     error(value: string): void { this.write('error', value); }
 
-    clear(): void { this.channel.clear(); }
-    replace(value: string): void { this.channel.replace(this.format('info', value).join('')); }
+    clear(): void {
+        this.channel.clear();
+        this.hasContent = false;
+    }
+    replace(value: string): void {
+        this.channel.replace(this.format('info', value).join('\n'));
+        this.hasContent = true;
+    }
     hide(): void { this.channel.hide(); }
     dispose(): void { this.channel.dispose(); }
 
@@ -39,7 +47,13 @@ export class MavenOutputChannel implements vscode.OutputChannel {
 
     private write(level: MessageLevel, value: string): void {
         if (LEVELS[level] >= this.getLogLevel()) {
-            this.channel.append(this.format(level, value).join(''));
+            // Keep the tail populated so VS Code fully rechecks new output.
+            // Separate progress from preceding output with a blank line: this
+            // changes the hidden line ranges even when the preceding Maven
+            // line was hidden, invalidating the editor's cached hidden areas.
+            const separator = this.hasContent ? (value.startsWith('[Test Progress') ? '\n\n' : '\n') : '';
+            this.channel.append(separator + this.format(level, value).join('\n'));
+            this.hasContent = true;
         }
     }
 
@@ -50,6 +64,6 @@ export class MavenOutputChannel implements vscode.OutputChannel {
             + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
         // Severity must precede the date: a canonical timestamp-first header
         // would reactivate VS Code's log-entry parser even on a text channel.
-        return value.split(/\r\n|\r|\n/).map(line => `[${level}] ${timestamp} ${line}\n`);
+        return value.split(/\r\n|\r|\n/).map(line => `[${level}] ${timestamp} ${line}`);
     }
 }

@@ -10,10 +10,10 @@ test('keeps readable log levels and timestamps without activating the native log
     output.appendLine('[Test Progress] ✓ 1 passed');
     output.warn('[Profiles] Missing profile\nCheck POM\rRetry');
     assert.deepEqual(writes, [
-        '[info] 2026-10-16 14:05:06.007 [Test Progress] ✓ 1 passed\n',
-        '[warning] 2026-10-16 14:05:06.007 [Profiles] Missing profile\n'
+        '[info] 2026-10-16 14:05:06.007 [Test Progress] ✓ 1 passed',
+        '\n[warning] 2026-10-16 14:05:06.007 [Profiles] Missing profile\n'
             + '[warning] 2026-10-16 14:05:06.007 Check POM\n'
-            + '[warning] 2026-10-16 14:05:06.007 Retry\n',
+            + '[warning] 2026-10-16 14:05:06.007 Retry',
     ]);
 });
 
@@ -29,8 +29,40 @@ test('follows changes to VS Code log level and suppresses debug output by defaul
     level = 6;
     output.error('[Runner] hidden');
     assert.equal(writes.length, 2);
-    assert.match(writes[0], /^\[info\] .* \[Maven\] visible\n$/);
-    assert.match(writes[1], /^\[debug\] .* \[Discovery\] visible\n$/);
+    assert.match(writes[0], /^\[info\] .* \[Maven\] visible$/);
+    assert.match(writes[1], /^\n\[debug\] .* \[Discovery\] visible$/);
+});
+
+test('keeps the tail populated across progress, summary, clear and replace for active filters', () => {
+    let content = '';
+    const sink = {
+        append: (value: string) => { content += value; },
+        clear: () => { content = ''; },
+        replace: (value: string) => { content = value; },
+    } as unknown as vscode.OutputChannel;
+    const output = new MavenOutputChannel(sink, () => 3);
+    const checkTail = () => assert.notEqual(content.split('\n').at(-1), '',
+        'an empty tail can stay hidden when the incremental filter appends matching output');
+    output.appendLine('[Maven] noise');
+    checkTail();
+    const previousTail = content;
+    output.appendLine('[Test Progress] ✓ 683 passed │ ✗ 0 failed │ ⊘ 32 skipped │ >> 0 remaining');
+    checkTail();
+    assert.ok(content.startsWith(`${previousTail}\n\n[info]`),
+        'a blank separator changes hidden line ranges before a matching progress message');
+    output.appendLine('[Test Progress · Summary] ✓ PASSED │ Σ 715 total │ ✓ 683 passed │ ✗ 0 failed │ ⊗ 0 errors │ ⊘ 32 skipped │ ◷ 1544.8s');
+    checkTail();
+    assert.equal(content.split('\n').filter(line => line.includes('[Test')).length, 2);
+    output.clear();
+    output.debug('suppressed');
+    output.appendLine('[Maven] next run');
+    assert.match(content, /^\[info\]/);
+    assert.equal(content.split('\n').length, 1);
+    output.replace('[Maven] replacement\r\nsecond line');
+    checkTail();
+    output.appendLine('[Test Progress · Summary] next summary');
+    checkTail();
+    assert.equal(content.split('\n').length, 4);
 });
 
 test('streams large output without clearing or replacing the displayed model', () => {
